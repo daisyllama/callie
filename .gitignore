@@ -1,2 +1,4 @@
 # .gitignore
 .streamlit/secrets.toml
+
+app.log
