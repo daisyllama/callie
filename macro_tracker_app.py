@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
+import pytz
 from pyairtable import Table # Import the Airtable library
 import logging
 import plotly.graph_objects as go
@@ -198,6 +199,11 @@ def plot_gauge(label, value, goal, unit):
     return fig
 
 
+def get_gmt8_today():
+    tz = pytz.timezone('Asia/Singapore')  # GMT+8
+    return datetime.now(tz).date()
+
+
 ## Streamlit Application Layout
 
 # Initialize Airtable goals on app startup
@@ -248,7 +254,7 @@ st.header("Log Your Meals")
 
 with st.form("meal_entry_form", clear_on_submit=True):
     meal_name = st.text_input("Meal Name", placeholder="e.g., Chonky Chicken Salad")
-    meal_date = st.date_input("Date", value=datetime.today())
+    meal_date = st.date_input("Date", value=get_gmt8_today())
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         meal_calories = st.number_input("Calories (kcal)", min_value=0.0, format="%.2f")
@@ -313,7 +319,7 @@ if st.button("🔄 Refresh Dashboard"):
     get_macro_goals_from_airtable.clear()
     st.experimental_rerun()
 
-selected_date_dashboard = st.date_input("View Dashboard for Date", value=datetime.today())
+selected_date_dashboard = st.date_input("View Dashboard for Date", value=get_gmt8_today())
 
 daily_meals_df = get_meals_from_airtable(selected_date_dashboard)
 

@@ -2,3 +2,4 @@ streamlit
 pandas
 pyairtable
 plotly
+pytz
