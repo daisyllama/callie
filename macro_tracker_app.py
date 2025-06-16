@@ -251,13 +251,13 @@ with st.form("meal_entry_form", clear_on_submit=True):
     meal_date = st.date_input("Date", value=datetime.today())
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        meal_calories = st.number_input("Calories (kcal)", min_value=0)
+        meal_calories = st.number_input("Calories (kcal)", min_value=0.0, format="%.2f")
     with col2:
-        meal_carbs = st.number_input("Carbohydrates (g)", min_value=0)
+        meal_carbs = st.number_input("Carbohydrates (g)", min_value=0.0, format="%.2f")
     with col3:
-        meal_fat = st.number_input("Fat (g)", min_value=0)
+        meal_fat = st.number_input("Fat (g)", min_value=0.0, format="%.2f")
     with col4:
-        meal_protein = st.number_input("Protein (g)", min_value=0)
+        meal_protein = st.number_input("Protein (g)", min_value=0.0, format="%.2f")
 
     if st.form_submit_button("Add Meal"):
         valid = True
@@ -272,8 +272,8 @@ with st.form("meal_entry_form", clear_on_submit=True):
                     value = value.strip()
                     if value == '':
                         raise ValueError
-                    value = int(float(value))
-                return int(value)
+                    value = float(value)
+                return float(value)
             except Exception:
                 error_msgs.append(f"{label} must be a non-negative number.")
                 return None
