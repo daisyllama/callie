@@ -308,6 +308,10 @@ with st.form("meal_entry_form", clear_on_submit=True):
 ## Daily Macro Dashboard
 
 st.header("Daily Macro Dashboard")
+if st.button("🔄 Refresh Dashboard"):
+    get_meals_from_airtable.clear()
+    get_macro_goals_from_airtable.clear()
+    st.experimental_rerun()
 
 selected_date_dashboard = st.date_input("View Dashboard for Date", value=datetime.today())
 
@@ -353,10 +357,9 @@ else:
 
 # --- Optional: Download Data ---
 if not all_meals_df.empty:
-    csv = all_meals_df.drop(columns=['ID']).to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download All Meal Data as CSV",
-        data=csv,
+        data=all_meals_df.drop(columns=['ID']).to_csv(index=False).encode('utf-8'),
         file_name="macro_tracker_data.csv",
         mime="text/csv",
     )
