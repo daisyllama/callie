@@ -25,6 +25,7 @@ logging.basicConfig(
 client_id = st.secrets["GOOGLE_CLIENT_ID"]
 client_secret = st.secrets["GOOGLE_CLIENT_SECRET"]
 redirect_uri = st.secrets["GOOGLE_REDIRECT_URI"]
+st.info(f"Redirect URI: {redirect_uri}")
 
 oauth2 = OAuth2Component(
     client_id=client_id,
