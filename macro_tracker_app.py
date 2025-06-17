@@ -149,7 +149,6 @@ def get_meals_from_airtable(selected_date=None):
         for record in records:
             fields = record['fields']
             meals_list.append({
-                'ID': fields.get('ID', None),  # Airtable autonumber column
                 'Date': pd.to_datetime(fields.get('date')).date() if fields.get('date') else None,
                 'Meal': fields.get('meal', ''),
                 'Calories (kcal)': fields.get('calories_kcal', 0),
@@ -410,10 +409,6 @@ with col_dash4:
 
 st.header("All Logged Meals")
 all_meals_df = get_meals_from_airtable()
-
-# Sort by Date descending, then by Airtable 'ID' descending
-if not all_meals_df.empty:
-    all_meals_df = all_meals_df.sort_values(by=['Date', 'ID'], ascending=[False, False])
 
 if not all_meals_df.empty:
     st.dataframe(all_meals_df, use_container_width=True)
