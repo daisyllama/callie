@@ -371,11 +371,15 @@ selected_date_dashboard = st.date_input("View Dashboard for Date", value=get_gmt
 
 daily_meals_df = get_meals_from_airtable(selected_date_dashboard)
 
+# Debug print to help diagnose cloud/local differences
+st.write("daily_meals_df columns:", daily_meals_df.columns.tolist())
+st.write(daily_meals_df)
+
 # Added defensive checks to ensure columns exist before summing, else 0.
-total_calories_today = daily_meals_df['Calories (kcal)'].sum() if 'Calories (kcal)' in daily_meals_df.columns else 0
-total_carbs_today = daily_meals_df['Carbs (g)'].sum() if 'Carbs (g)' in daily_meals_df.columns else 0
-total_fat_today = daily_meals_df['Fat (g)'].sum() if 'Fat (g)' in daily_meals_df.columns else 0
-total_protein_today = daily_meals_df['Protein (g)'].sum() if 'Protein (g)' in daily_meals_df.columns else 0
+total_calories_today = daily_meals_df.get('Calories (kcal)', pd.Series(dtype=float)).sum()
+total_carbs_today = daily_meals_df.get('Carbs (g)', pd.Series(dtype=float)).sum()
+total_fat_today = daily_meals_df.get('Fat (g)', pd.Series(dtype=float)).sum()
+total_protein_today = daily_meals_df.get('Protein (g)', pd.Series(dtype=float)).sum()
 
 goals_for_display = get_macro_goals_from_airtable()
 
