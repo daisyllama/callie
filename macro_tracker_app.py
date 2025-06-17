@@ -5,9 +5,14 @@ import pytz
 from pyairtable import Table # Import the Airtable library
 import logging
 import plotly.graph_objects as go
+from streamlit_oauth import OAuth2Component
+import requests
 
-# --- Configuration ---
+
+# --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
 APP_TITLE = "Daily Macro Tracker"
+st.set_page_config(layout="wide", page_title=APP_TITLE)
+st.title(APP_TITLE) # You can put st.title here, it's also a Streamlit command
 
 # Set up logging to file
 logging.basicConfig(
@@ -16,9 +21,45 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s:%(message)s'
 )
 
-# --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
-st.set_page_config(layout="wide", page_title=APP_TITLE)
-st.title(APP_TITLE) # You can put st.title here, it's also a Streamlit command
+# Set up your Google OAuth credentials in Streamlit secrets
+client_id = st.secrets["GOOGLE_CLIENT_ID"]
+client_secret = st.secrets["GOOGLE_CLIENT_SECRET"]
+redirect_uri = st.secrets["GOOGLE_REDIRECT_URI"]
+
+oauth2 = OAuth2Component(
+    client_id=client_id,
+    client_secret=client_secret,
+    authorize_endpoint="https://accounts.google.com/o/oauth2/v2/auth",
+    token_endpoint="https://oauth2.googleapis.com/token",
+    revoke_token_endpoint="https://oauth2.googleapis.com/revoke"
+)
+
+# --- Google OAuth Login/Logout Logic ---
+if "user_email" not in st.session_state:
+    result = oauth2.authorize_button(
+        "Login with Google",
+        redirect_uri=redirect_uri,
+        scope="openid email profile", 
+        key="google_login"
+    )
+    if result and "token" in result:
+        access_token = result["token"]["access_token"]
+        userinfo_response = requests.get(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        user_info = userinfo_response.json()
+        st.session_state["user_email"] = user_info["email"]
+        st.success(f"Logged in as {user_info['email']}")
+        st.rerun()
+    else:
+        st.stop()
+else:
+    st.success(f"Logged in as {st.session_state['user_email']}")
+    if st.button("Logout"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 
 # --- Airtable Connection ---
 @st.cache_resource
@@ -30,8 +71,8 @@ def get_airtable_tables():
 
         # Basic check to ensure secrets are loaded
         if not api_key or not base_id:
-            st.error("Airtable API Key or Base ID not found in .streamlit/secrets.toml. Please check your setup.")
-            logging.error("Airtable API Key or Base ID not found in .streamlit/secrets.toml. Please check your setup.")
+            st.error("Airtable API Key or Base ID not found. Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/.")
+            logging.error("Airtable API Key or Base ID not found. Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/.")
             st.stop() # Stop the app if credentials are missing
 
         meals_table = Table(api_key, base_id, "Meals")
@@ -40,8 +81,8 @@ def get_airtable_tables():
         # st.success("Connected to Airtable successfully!") # REMOVED: Cannot be before set_page_config
         return meals_table, goals_table
     except Exception as e:
-        st.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
-        logging.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
+        st.error(f"Error connecting to Airtable: {e}. . Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/")
+        logging.error(f"Error connecting to Airtable: {e}. . Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/")
         st.stop()
 
 # Get the Airtable table objects at application startup
@@ -50,37 +91,40 @@ meals_table, goals_table = get_airtable_tables()
 
 # --- Database Functions (now Airtable Functions) ---
 
-def initialize_airtable_goals():
+def initialise_airtable_goals():
     """
-    Ensures there's at least one record in the Goals table.
-    If the Goals table is empty, it creates a default goal record.
+    Ensures there's at least one record in the Goals table for the current user.
+    If not, it creates a default goal record for that user.
     """
     try:
-        existing_goals = goals_table.all(max_records=1)
+        user_email = st.session_state.get("user_email", "demo@example.com")
+        existing_goals = goals_table.all(formula=f"{{user_email}} = '{user_email}'", max_records=1)
         if not existing_goals:
-            st.info("No macro goals found in Airtable. Setting up default goals...")
+            st.info("No macro goals found in Airtable for this user. Setting up default goals...")
             goals_table.create({
-                "Calories (kcal)": 2000,
-                "Carbs (g)": 250,
-                "Fat (g)": 70,
-                "Protein (g)": 150
+                "calories_kcal": 2000,
+                "protein_g": 150,
+                "carbs_g": 250,
+                "fat_g": 70,
+                "user_email": user_email
             })
-            st.success("Default goals have been set in Airtable!") # This is okay here, as it's after set_page_config
+            st.success("Default goals have been set in Airtable!")
             get_macro_goals_from_airtable.clear()
     except Exception as e:
-        st.error(f"Error checking or initializing goals in Airtable: {e}")
-        logging.error(f"Error checking or initializing goals in Airtable: {e}")
+        st.error(f"Error checking or initialising goals in Airtable: {e}")
+        logging.error(f"Error checking or initialising goals in Airtable: {e}")
 
-def save_meal_to_airtable(meal_date, meal_name, calories, carbs, fat, protein):
+def save_meal_to_airtable(meal_date, meal_name, calories, protein, carbs, fat):
     """Saves a new meal entry to the Airtable 'Meals' table."""
     try:
         meals_table.create({
-            "Date": meal_date.strftime("%Y-%m-%d"),
-            "Meal": meal_name,
-            "Calories (kcal)": calories,
-            "Carbs (g)": carbs,
-            "Fat (g)": fat,
-            "Protein (g)": protein,
+            "date": meal_date.strftime("%Y-%m-%d"),
+            "meal": meal_name,
+            "calories_kcal": calories,
+            "protein_g": protein,
+            "carbs_g": carbs,
+            "fat_g": fat,
+            "user_email": st.session_state.get("user_email", "demo@example.com")
         })
         # Success message shown later with st.rerun
     except Exception as e:
@@ -90,32 +134,31 @@ def save_meal_to_airtable(meal_date, meal_name, calories, carbs, fat, protein):
 @st.cache_data(ttl=300)
 def get_meals_from_airtable(selected_date=None):
     """Retrieves meal data from Airtable, optionally filtered by a specific date."""
-    formula = None
+    user_email = st.session_state.get("user_email", "demo@example.com")
     if selected_date:
-        formula = f"IS_SAME({{Date}}, '{selected_date.strftime('%Y-%m-%d')}')"
-
+        formula = f"AND({{user_email}} = '{user_email}', IS_SAME({{date}}, '{selected_date.strftime('%Y-%m-%d')}'))"
+    else:
+        formula = f"{{user_email}} = '{user_email}'"
     try:
-        records = meals_table.all(formula=formula, sort=['-Date'])
-
+        records = meals_table.all(formula=formula, sort=['-date'])
         if not records:
-            return pd.DataFrame(columns=['ID', 'Date', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)', 'Meal'])
+            return pd.DataFrame(columns=['date', 'meal', 'calories_kcal', 'protein_g', 'carbs_g', 'fat_g'])
 
         meals_list = []
         for record in records:
             fields = record['fields']
             meals_list.append({
-                'ID': record['id'],
-                'Date': pd.to_datetime(fields.get('Date')).date() if fields.get('Date') else None,
-                'Calories (kcal)': fields.get('Calories (kcal)', 0),
-                'Protein (g)': fields.get('Protein (g)', 0),
-                'Carbs (g)': fields.get('Carbs (g)', 0),
-                'Fat (g)': fields.get('Fat (g)', 0),
-                'Meal': fields.get('Meal', '')
+                'Date': pd.to_datetime(fields.get('date')).date() if fields.get('date') else None,
+                'Meal': fields.get('meal', ''),
+                'Calories (kcal)': fields.get('calories_kcal', 0),
+                'Protein (g)': fields.get('protein_g', 0),
+                'Carbs (g)': fields.get('carbs_g', 0),
+                'Fat (g)': fields.get('fat_g', 0)
             })
 
         df = pd.DataFrame(meals_list)
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date']).dt.date
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date']).dt.date
         # Reorder columns for display
         display_cols = ['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)']
         df = df[[col for col in display_cols if col in df.columns]]
@@ -123,31 +166,32 @@ def get_meals_from_airtable(selected_date=None):
     except Exception as e:
         st.error(f"Error fetching meals from Airtable: {e}")
         logging.error(f"Error fetching meals from Airtable: {e}")
-        return pd.DataFrame(columns=['ID', 'Date', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)', 'Meal'])
+        return pd.DataFrame(columns=['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)'])
 
 
 @st.cache_data(ttl=300)
 def get_macro_goals_from_airtable():
     """Retrieves the single macro goals record from the Airtable 'Goals' table."""
+    user_email = st.session_state.get("user_email", "demo@example.com")
     try:
-        records = goals_table.all(max_records=1)
+        records = goals_table.all(formula=f"{{user_email}} = '{user_email}'", max_records=1)
         if records:
             fields = records[0]['fields']
             st.session_state['goals_record_id'] = records[0]['id']
             return {
-                'calories': fields.get('Calories (kcal)', 2000),
-                'carbs': fields.get('Carbs (g)', 250),
-                'fat': fields.get('Fat (g)', 70),
-                'protein': fields.get('Protein (g)', 150)
+                'calories': fields.get('calories_kcal', 2000),
+                'protein': fields.get('protein_g', 150),
+                'carbs': fields.get('carbs_g', 250),
+                'fat': fields.get('fat_g', 70)
             }
         else:
-            return {'calories': 2000, 'carbs': 250, 'fat': 70, 'protein': 150}
+            return {'calories': 2000, 'protein': 150, 'carbs': 250, 'fat': 70}
     except Exception as e:
         st.error(f"Error fetching goals from Airtable: {e}")
         logging.error(f"Error fetching goals from Airtable: {e}")
-        return {'calories': 2000, 'carbs': 250, 'fat': 70, 'protein': 150}
+        return {'calories': 2000, 'protein': 150, 'carbs': 250, 'fat': 70}
 
-def update_macro_goals_in_airtable(calories, carbs, fat, protein):
+def update_macro_goals_in_airtable(calories, protein, carbs, fat):
     """Updates the macro goals in the Airtable 'Goals' table."""
     try:
         goals_record_id = st.session_state.get('goals_record_id')
@@ -156,10 +200,10 @@ def update_macro_goals_in_airtable(calories, carbs, fat, protein):
             return
 
         goals_table.update(goals_record_id, {
-            "Calories (kcal)": calories,
-            "Carbs (g)": carbs,
-            "Fat (g)": fat,
-            "Protein (g)": protein
+            "calories_kcal": calories,
+            "protein_g": protein,
+            "carbs_g": carbs,
+            "fat_g": fat
         })
         st.success("Daily macro goals updated in Airtable!")
     except Exception as e:
@@ -211,7 +255,7 @@ def get_gmt8_today():
 
 # Initialize Airtable goals on app startup
 # This will now run AFTER set_page_config
-initialize_airtable_goals()
+initialise_airtable_goals()
 
 # Fetch current goals from Airtable for display in sidebar and dashboard
 current_macro_goals = get_macro_goals_from_airtable()
@@ -246,7 +290,7 @@ with st.sidebar.form("macro_goal_form"):
         step=5
     )
     if st.form_submit_button("Update Goals"):
-        update_macro_goals_in_airtable(new_calories_goal, new_carbs_goal, new_fat_goal, new_protein_goal)
+        update_macro_goals_in_airtable(new_calories_goal, new_protein_goal, new_carbs_goal, new_fat_goal)
         get_macro_goals_from_airtable.clear()
         st.rerun()
 
@@ -303,9 +347,9 @@ with st.form("meal_entry_form", clear_on_submit=True):
                 meal_date,
                 meal_name,
                 meal_calories_val,
+                meal_protein_val,
                 meal_carbs_val,
-                meal_fat_val,
-                meal_protein_val
+                meal_fat_val
             )
             get_meals_from_airtable.clear()
             st.rerun()

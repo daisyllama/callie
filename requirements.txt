@@ -3,3 +3,4 @@ pandas
 pyairtable
 plotly
 pytz
+streamlit-oauth
