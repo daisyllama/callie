@@ -98,7 +98,7 @@ def get_meals_from_airtable(selected_date=None):
         records = meals_table.all(formula=formula, sort=['-Date'])
 
         if not records:
-            return pd.DataFrame(columns=['ID', 'Date', 'Meal', 'Calories (kcal)', 'Carbs (g)', 'Fat (g)', 'Protein (g)'])
+            return pd.DataFrame(columns=['ID', 'Date', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)', 'Meal'])
 
         meals_list = []
         for record in records:
@@ -106,21 +106,24 @@ def get_meals_from_airtable(selected_date=None):
             meals_list.append({
                 'ID': record['id'],
                 'Date': pd.to_datetime(fields.get('Date')).date() if fields.get('Date') else None,
-                'Meal': fields.get('Meal', ''),
                 'Calories (kcal)': fields.get('Calories (kcal)', 0),
+                'Protein (g)': fields.get('Protein (g)', 0),
                 'Carbs (g)': fields.get('Carbs (g)', 0),
                 'Fat (g)': fields.get('Fat (g)', 0),
-                'Protein (g)': fields.get('Protein (g)', 0)
+                'Meal': fields.get('Meal', '')
             })
 
         df = pd.DataFrame(meals_list)
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date']).dt.date
+        # Reorder columns for display
+        display_cols = ['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)']
+        df = df[[col for col in display_cols if col in df.columns]]
         return df
     except Exception as e:
         st.error(f"Error fetching meals from Airtable: {e}")
         logging.error(f"Error fetching meals from Airtable: {e}")
-        return pd.DataFrame(columns=['ID', 'Date', 'Meal', 'Calories (kcal)', 'Carbs (g)', 'Fat (g)', 'Protein (g)'])
+        return pd.DataFrame(columns=['ID', 'Date', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)', 'Meal'])
 
 
 @st.cache_data(ttl=300)
@@ -257,13 +260,13 @@ with st.form("meal_entry_form", clear_on_submit=True):
     meal_date = st.date_input("Date", value=get_gmt8_today())
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        meal_calories = st.number_input("Calories (kcal)", min_value=0.0, format="%.2f")
+        meal_calories = st.text_input("Calories (kcal)", value="", placeholder="e.g. 350")
     with col2:
-        meal_carbs = st.number_input("Carbohydrates (g)", min_value=0.0, format="%.2f")
+        meal_protein = st.text_input("Protein (g)", value="", placeholder="e.g. 25")
     with col3:
-        meal_fat = st.number_input("Fat (g)", min_value=0.0, format="%.2f")
+        meal_carbs = st.text_input("Carbohydrates (g)", value="", placeholder="e.g. 40")
     with col4:
-        meal_protein = st.number_input("Protein (g)", min_value=0.0, format="%.2f")
+        meal_fat = st.text_input("Fat (g)", value="", placeholder="e.g. 10")
 
     if st.form_submit_button("Add Meal"):
         valid = True
@@ -273,25 +276,25 @@ with st.form("meal_entry_form", clear_on_submit=True):
             error_msgs.append("Meal name is required.")
         def parse_number(value, label):
             try:
-                # Accept both string and numeric input, strip leading zeros
-                if isinstance(value, str):
-                    value = value.strip()
-                    if value == '':
-                        raise ValueError
-                    value = float(value)
-                return float(value)
+                value = value.strip()
+                if value == '':
+                    raise ValueError
+                value = float(value)
+                if value < 0:
+                    raise ValueError
+                return value
             except Exception:
                 error_msgs.append(f"{label} must be a non-negative number.")
                 return None
         meal_calories_val = parse_number(meal_calories, "Calories (kcal)")
+        meal_protein_val = parse_number(meal_protein, "Protein (g)")
         meal_carbs_val = parse_number(meal_carbs, "Carbohydrates (g)")
         meal_fat_val = parse_number(meal_fat, "Fat (g)")
-        meal_protein_val = parse_number(meal_protein, "Protein (g)")
         for label, value in [
             ("Calories (kcal)", meal_calories_val),
+            ("Protein (g)", meal_protein_val),
             ("Carbohydrates (g)", meal_carbs_val),
-            ("Fat (g)", meal_fat_val),
-            ("Protein (g)", meal_protein_val)
+            ("Fat (g)", meal_fat_val)
         ]:
             if value is None or value < 0:
                 valid = False
@@ -317,7 +320,7 @@ st.header("Daily Macro Dashboard")
 if st.button("🔄 Refresh Dashboard"):
     get_meals_from_airtable.clear()
     get_macro_goals_from_airtable.clear()
-    st.experimental_rerun()
+    st.rerun()
 
 selected_date_dashboard = st.date_input("View Dashboard for Date", value=get_gmt8_today())
 
@@ -338,15 +341,15 @@ with col_dash1:
     if fig:
         st.plotly_chart(fig, use_container_width=True)
 with col_dash2:
-    fig = plot_gauge("Carbohydrates", total_carbs_today, goals_for_display['carbs'], "g")
+    fig = plot_gauge("Protein", total_protein_today, goals_for_display['protein'], "g")
     if fig:
         st.plotly_chart(fig, use_container_width=True)
 with col_dash3:
-    fig = plot_gauge("Fat", total_fat_today, goals_for_display['fat'], "g")
+    fig = plot_gauge("Carbohydrates", total_carbs_today, goals_for_display['carbs'], "g")
     if fig:
         st.plotly_chart(fig, use_container_width=True)
 with col_dash4:
-    fig = plot_gauge("Protein", total_protein_today, goals_for_display['protein'], "g")
+    fig = plot_gauge("Fat", total_fat_today, goals_for_display['fat'], "g")
     if fig:
         st.plotly_chart(fig, use_container_width=True)
 
@@ -357,7 +360,7 @@ st.header("All Logged Meals")
 all_meals_df = get_meals_from_airtable()
 
 if not all_meals_df.empty:
-    st.dataframe(all_meals_df.drop(columns=['ID']), use_container_width=True)
+    st.dataframe(all_meals_df, use_container_width=True)
 else:
     st.info("No meals have been logged yet. Use the 'Log Your Meals' section above to add your first entry!")
 
@@ -365,7 +368,7 @@ else:
 if not all_meals_df.empty:
     st.download_button(
         label="Download All Meal Data as CSV",
-        data=all_meals_df.drop(columns=['ID']).to_csv(index=False).encode('utf-8'),
+        data=all_meals_df.drop(columns=['ID'], errors='ignore').to_csv(index=False).encode('utf-8'),
         file_name="macro_tracker_data.csv",
         mime="text/csv",
     )
