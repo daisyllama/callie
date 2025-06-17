@@ -419,7 +419,7 @@ else:
 if not all_meals_df.empty:
     st.download_button(
         label="Download All Meal Data as CSV",
-        data=all_meals_df.drop(columns=['ID'], errors='ignore').to_csv(index=False).encode('utf-8'),
+        data=all_meals_df.to_csv(index=False).encode('utf-8'),
         file_name="macro_tracker_data.csv",
         mime="text/csv",
     )
