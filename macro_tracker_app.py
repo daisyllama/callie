@@ -372,8 +372,9 @@ selected_date_dashboard = st.date_input("View Dashboard for Date", value=get_gmt
 daily_meals_df = get_meals_from_airtable(selected_date_dashboard)
 
 # Debug print to help diagnose cloud/local differences
-st.write("daily_meals_df columns:", daily_meals_df.columns.tolist())
-st.write(daily_meals_df)
+# st.write("Current user_email:", st.session_state.get("user_email"))
+# st.write("daily_meals_df columns:", daily_meals_df.columns.tolist())
+# st.write(daily_meals_df)
 
 # Added defensive checks to ensure columns exist before summing, else 0.
 total_calories_today = daily_meals_df.get('Calories (kcal)', pd.Series(dtype=float)).sum()
