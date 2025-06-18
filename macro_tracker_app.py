@@ -2,16 +2,17 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta, timezone
 import pytz
-from pyairtable import Table # Import the Airtable library
+from pyairtable import Table
 import logging
 import plotly.graph_objects as go
 from streamlit_oauth import OAuth2Component
 import requests
-
+from streamlit_cookies_manager import EncryptedCookieManager
 
 # --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
 APP_TITLE = "Daily Macro Tracker"
 st.set_page_config(layout="wide", page_title=APP_TITLE)
+
 st.title(APP_TITLE) # You can put st.title here, it's also a Streamlit command
 
 # Set up logging to file
@@ -19,6 +20,12 @@ logging.basicConfig(
     filename='app.log',
     level=logging.ERROR,  # Change to logging.INFO for more details
     format='%(asctime)s %(levelname)s:%(message)s'
+)
+
+# --- Set up cookies manager for persistent login ---
+cookies = EncryptedCookieManager(
+    prefix="macrotracker_",
+    password=st.secrets.get("COOKIE_SECRET", "changeme")
 )
 
 # Set up your Google OAuth credentials in Streamlit secrets
@@ -36,6 +43,19 @@ oauth2 = OAuth2Component(
 )
 
 # --- Google OAuth Login/Logout Logic ---
+# Try to restore access_token from cookie
+if "access_token" not in st.session_state and "access_token" in cookies:
+    st.session_state["access_token"] = cookies["access_token"]
+    # Try to fetch user info if not already present
+    if "user_email" not in st.session_state:
+        userinfo_response = requests.get(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": f"Bearer {cookies['access_token']}"}
+        )
+        if userinfo_response.status_code == 200:
+            user_info = userinfo_response.json()
+            st.session_state["user_email"] = user_info["email"]
+
 if "user_email" not in st.session_state:
     result = oauth2.authorize_button(
         "Login with Google",
@@ -51,6 +71,9 @@ if "user_email" not in st.session_state:
         )
         user_info = userinfo_response.json()
         st.session_state["user_email"] = user_info["email"]
+        st.session_state["access_token"] = access_token
+        cookies["access_token"] = access_token
+        cookies.save()
         st.success(f"Logged in as {user_info['email']}")
         st.rerun()
     else:
@@ -60,6 +83,9 @@ else:
     if st.button("Logout"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
+        if "access_token" in cookies:
+            del cookies["access_token"]
+            cookies.save()
         st.rerun()
 
 # --- Airtable Connection ---
@@ -105,8 +131,9 @@ def initialise_airtable_goals():
             goals_table.create({
                 "calories_kcal": 2000,
                 "protein_g": 150,
-                "carbs_g": 250,
                 "fat_g": 70,
+                "cholesterol_mg": 300,
+                "carbs_g": 250,
                 "user_email": user_email
             })
             st.success("Default goals have been set in Airtable!")
@@ -115,7 +142,7 @@ def initialise_airtable_goals():
         st.error(f"Error checking or initialising goals in Airtable: {e}")
         logging.error(f"Error checking or initialising goals in Airtable: {e}")
 
-def save_meal_to_airtable(meal_date, meal_name, calories, protein, carbs, fat):
+def save_meal_to_airtable(meal_date, meal_name, calories, protein, fat, cholesterol, carbs):
     """Saves a new meal entry to the Airtable 'Meals' table."""
     try:
         meals_table.create({
@@ -123,8 +150,9 @@ def save_meal_to_airtable(meal_date, meal_name, calories, protein, carbs, fat):
             "meal": meal_name,
             "calories_kcal": calories,
             "protein_g": protein,
-            "carbs_g": carbs,
             "fat_g": fat,
+            "cholesterol_mg": cholesterol,
+            "carbs_g": carbs,
             "user_email": st.session_state.get("user_email", "demo@example.com")
         })
         # Success message shown later with st.rerun
@@ -153,21 +181,22 @@ def get_meals_from_airtable(selected_date=None):
                 'Meal': fields.get('meal', ''),
                 'Calories (kcal)': fields.get('calories_kcal', 0),
                 'Protein (g)': fields.get('protein_g', 0),
-                'Carbs (g)': fields.get('carbs_g', 0),
-                'Fat (g)': fields.get('fat_g', 0)
+                'Fat (g)': fields.get('fat_g', 0),
+                'Cholesterol (mg)': fields.get('cholesterol_mg', 0),
+                'Carbohydrates (g)': fields.get('carbs_g', 0)
             })
 
         df = pd.DataFrame(meals_list)
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date']).dt.date
         # Reorder columns for display
-        display_cols = ['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)']
+        display_cols = ['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)']
         df = df[[col for col in display_cols if col in df.columns]]
         return df
     except Exception as e:
         st.error(f"Error fetching meals from Airtable: {e}")
         logging.error(f"Error fetching meals from Airtable: {e}")
-        return pd.DataFrame(columns=['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Carbs (g)', 'Fat (g)'])
+        return pd.DataFrame(columns=['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)'])
 
 
 @st.cache_data(ttl=300)
@@ -182,17 +211,18 @@ def get_macro_goals_from_airtable():
             return {
                 'calories': fields.get('calories_kcal', 2000),
                 'protein': fields.get('protein_g', 150),
-                'carbs': fields.get('carbs_g', 250),
-                'fat': fields.get('fat_g', 70)
+                'fat': fields.get('fat_g', 70),
+                'cholesterol': fields.get('cholesterol_mg', 300),
+                'carbs': fields.get('carbs_g', 250)
             }
         else:
-            return {'calories': 2000, 'protein': 150, 'carbs': 250, 'fat': 70}
+            return {'calories': 2000, 'protein': 150, 'fat': 70, 'cholesterol': 300, 'carbs': 250}
     except Exception as e:
         st.error(f"Error fetching goals from Airtable: {e}")
         logging.error(f"Error fetching goals from Airtable: {e}")
-        return {'calories': 2000, 'protein': 150, 'carbs': 250, 'fat': 70}
+        return {'calories': 2000, 'protein': 150, 'fat': 70, 'cholesterol': 300, 'carbs': 250}
 
-def update_macro_goals_in_airtable(calories, protein, carbs, fat):
+def update_macro_goals_in_airtable(calories, protein, fat, cholesterol, carbs):
     """Updates the macro goals in the Airtable 'Goals' table."""
     try:
         goals_record_id = st.session_state.get('goals_record_id')
@@ -203,8 +233,9 @@ def update_macro_goals_in_airtable(calories, protein, carbs, fat):
         goals_table.update(goals_record_id, {
             "calories_kcal": calories,
             "protein_g": protein,
-            "carbs_g": carbs,
-            "fat_g": fat
+            "fat_g": fat,
+            "cholesterol_mg": cholesterol,
+            "carbs_g": carbs
         })
         st.success("Daily macro goals updated in Airtable!")
     except Exception as e:
@@ -272,10 +303,10 @@ with st.sidebar.form("macro_goal_form"):
         value=current_macro_goals['calories'],
         step=50
     )
-    new_carbs_goal = st.number_input(
-        "Carbohydrates (g)",
+    new_protein_goal = st.number_input(
+        "Protein (g)",
         min_value=0,
-        value=current_macro_goals['carbs'],
+        value=current_macro_goals['protein'],
         step=5
     )
     new_fat_goal = st.number_input(
@@ -284,14 +315,20 @@ with st.sidebar.form("macro_goal_form"):
         value=current_macro_goals['fat'],
         step=5
     )
-    new_protein_goal = st.number_input(
-        "Protein (g)",
+    new_cholesterol_goal = st.number_input(
+        "Cholesterol (mg)",
         min_value=0,
-        value=current_macro_goals['protein'],
+        value=current_macro_goals['cholesterol'],
+        step=5
+    )
+    new_carbs_goal = st.number_input(
+        "Carbohydrates (g)",
+        min_value=0,
+        value=current_macro_goals['carbs'],
         step=5
     )
     if st.form_submit_button("Update Goals"):
-        update_macro_goals_in_airtable(new_calories_goal, new_protein_goal, new_carbs_goal, new_fat_goal)
+        update_macro_goals_in_airtable(new_calories_goal, new_protein_goal, new_fat_goal, new_cholesterol_goal, new_carbs_goal)
         get_macro_goals_from_airtable.clear()
         st.rerun()
 
@@ -303,15 +340,17 @@ st.header("Log Your Meals")
 with st.form("meal_entry_form", clear_on_submit=True):
     meal_name = st.text_input("Meal Name", placeholder="e.g., Chonky Chicken Salad")
     meal_date = st.date_input("Date", value=get_gmt8_today())
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         meal_calories = st.text_input("Calories (kcal)", value="", placeholder="e.g. 350")
     with col2:
         meal_protein = st.text_input("Protein (g)", value="", placeholder="e.g. 25")
     with col3:
-        meal_carbs = st.text_input("Carbohydrates (g)", value="", placeholder="e.g. 40")
-    with col4:
         meal_fat = st.text_input("Fat (g)", value="", placeholder="e.g. 10")
+    with col4:
+        meal_cholesterol = st.text_input("Cholesterol (mg)", value="", placeholder="e.g. 50")
+    with col5:
+        meal_carbs = st.text_input("Carbohydrates (g)", value="", placeholder="e.g. 40")
 
     if st.form_submit_button("Add Meal"):
         valid = True
@@ -333,13 +372,15 @@ with st.form("meal_entry_form", clear_on_submit=True):
                 return None
         meal_calories_val = parse_number(meal_calories, "Calories (kcal)")
         meal_protein_val = parse_number(meal_protein, "Protein (g)")
-        meal_carbs_val = parse_number(meal_carbs, "Carbohydrates (g)")
         meal_fat_val = parse_number(meal_fat, "Fat (g)")
+        meal_cholesterol_val = parse_number(meal_cholesterol, "Cholesterol (mg)")
+        meal_carbs_val = parse_number(meal_carbs, "Carbohydrates (g)")
         for label, value in [
             ("Calories (kcal)", meal_calories_val),
             ("Protein (g)", meal_protein_val),
-            ("Carbohydrates (g)", meal_carbs_val),
-            ("Fat (g)", meal_fat_val)
+            ("Fat (g)", meal_fat_val),
+            ("Cholesterol (mg)", meal_cholesterol_val),
+            ("Carbohydrates (g)", meal_carbs_val)
         ]:
             if value is None or value < 0:
                 valid = False
@@ -349,8 +390,9 @@ with st.form("meal_entry_form", clear_on_submit=True):
                 meal_name,
                 meal_calories_val,
                 meal_protein_val,
-                meal_carbs_val,
-                meal_fat_val
+                meal_fat_val,
+                meal_cholesterol_val,
+                meal_carbs_val
             )
             get_meals_from_airtable.clear()
             st.rerun()
@@ -378,37 +420,59 @@ daily_meals_df = get_meals_from_airtable(selected_date_dashboard)
 
 # Added defensive checks to ensure columns exist before summing, else 0.
 total_calories_today = daily_meals_df.get('Calories (kcal)', pd.Series(dtype=float)).sum()
-total_carbs_today = daily_meals_df.get('Carbs (g)', pd.Series(dtype=float)).sum()
-total_fat_today = daily_meals_df.get('Fat (g)', pd.Series(dtype=float)).sum()
 total_protein_today = daily_meals_df.get('Protein (g)', pd.Series(dtype=float)).sum()
+total_fat_today = daily_meals_df.get('Fat (g)', pd.Series(dtype=float)).sum()
+total_cholesterol_today = daily_meals_df.get('Cholesterol (mg)', pd.Series(dtype=float)).sum()
+total_carbs_today = daily_meals_df.get('Carbohydrates (g)', pd.Series(dtype=float)).sum()
 
 goals_for_display = get_macro_goals_from_airtable()
 
 st.subheader(f"Progress for {selected_date_dashboard.strftime('%B %d, %Y')}")
-col_dash1, col_dash2, col_dash3, col_dash4 = st.columns(4)
 
-with col_dash1:
-    fig = plot_gauge("Calories", total_calories_today, goals_for_display['calories'], "kcal")
+# Macro summary for gauge display with left/over text
+macro_summaries = [
+    ("Calories", total_calories_today, goals_for_display['calories'], "kcal"),
+    ("Protein", total_protein_today, goals_for_display['protein'], "g"),
+    ("Fat", total_fat_today, goals_for_display['fat'], "g"),
+    ("Cholesterol", total_cholesterol_today, goals_for_display['cholesterol'], "mg"),
+    ("Carbohydrates", total_carbs_today, goals_for_display['carbs'], "g"),
+]
+gauge_cols = st.columns(len(macro_summaries))
+for idx, (label, intake, goal, unit) in enumerate(macro_summaries):
+    fig = plot_gauge(label, intake, goal, unit)
     if fig:
-        st.plotly_chart(fig, use_container_width=True)
-with col_dash2:
-    fig = plot_gauge("Protein", total_protein_today, goals_for_display['protein'], "g")
-    if fig:
-        st.plotly_chart(fig, use_container_width=True)
-with col_dash3:
-    fig = plot_gauge("Carbohydrates", total_carbs_today, goals_for_display['carbs'], "g")
-    if fig:
-        st.plotly_chart(fig, use_container_width=True)
-with col_dash4:
-    fig = plot_gauge("Fat", total_fat_today, goals_for_display['fat'], "g")
-    if fig:
-        st.plotly_chart(fig, use_container_width=True)
+        gauge_cols[idx].plotly_chart(fig, use_container_width=True)
+        remaining = goal - intake
+        exceeded = intake > goal
+        if exceeded:
+            gauge_cols[idx].markdown(f"""
+                <div style='text-align:center;margin-top:-6.5em;line-height:1;'>
+                    <span style='color:red;font-weight:bold;font-size:1.5em;'>+{abs(remaining):.0f} {unit} over</span>
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            gauge_cols[idx].markdown(f"""
+                <div style='text-align:center;margin-top:-6.5em;line-height:1;'>
+                    <span style='color:green;font-weight:bold;font-size:1.5em;'>{remaining:.0f} {unit} left</span>
+                </div>
+            """, unsafe_allow_html=True)
 
 
 ## All Logged Meals
 
 st.header("All Logged Meals")
 all_meals_df = get_meals_from_airtable()
+
+# Ensure DataFrame always has the correct columns for sorting and display
+expected_cols = ['ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)']
+for col in expected_cols:
+    if col not in all_meals_df.columns:
+        all_meals_df[col] = pd.Series(dtype='object')
+all_meals_df = all_meals_df[expected_cols]
+
+# Sort by Date descending, then by Airtable 'ID' descending
+if not all_meals_df.empty:
+    all_meals_df = all_meals_df.sort_values(by=['Date', 'ID'], ascending=[False, False])
 
 if not all_meals_df.empty:
     st.dataframe(all_meals_df, use_container_width=True)
