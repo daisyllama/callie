@@ -45,28 +45,57 @@ oauth2 = OAuth2Component(
 )
 
 # --- Google OAuth Login/Logout Logic ---
-# Try to restore access_token from cookie
+# Try to restore tokens from cookie
 if "access_token" not in st.session_state and "access_token" in cookies:
     st.session_state["access_token"] = cookies["access_token"]
-    # Try to fetch user info if not already present
-    if "user_email" not in st.session_state:
-        userinfo_response = requests.get(
-            "https://openidconnect.googleapis.com/v1/userinfo",
-            headers={"Authorization": f"Bearer {cookies['access_token']}"}
-        )
-        if userinfo_response.status_code == 200:
-            user_info = userinfo_response.json()
-            st.session_state["user_email"] = user_info["email"]
+if "refresh_token" not in st.session_state and "refresh_token" in cookies:
+    st.session_state["refresh_token"] = cookies["refresh_token"]
+
+# Helper to refresh access token
+import time
+
+def refresh_access_token(refresh_token):
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token"
+    }
+    resp = requests.post(token_url, data=data)
+    if resp.status_code == 200:
+        token_data = resp.json()
+        return token_data.get("access_token"), token_data.get("expires_in", 86400)
+    return None, None
+
+# If we have a refresh_token but no access_token, try to refresh
+if "refresh_token" in st.session_state and "access_token" not in st.session_state:
+    new_token, expires_in = refresh_access_token(st.session_state["refresh_token"])
+    if new_token:
+        st.session_state["access_token"] = new_token
+        cookies["access_token"] = new_token
+        cookies.save()
+
+# Try to fetch user info if not already present
+if "access_token" in st.session_state and "user_email" not in st.session_state:
+    userinfo_response = requests.get(
+        "https://openidconnect.googleapis.com/v1/userinfo",
+        headers={"Authorization": f"Bearer {st.session_state['access_token']}"}
+    )
+    if userinfo_response.status_code == 200:
+        user_info = userinfo_response.json()
+        st.session_state["user_email"] = user_info["email"]
 
 if "user_email" not in st.session_state:
     result = oauth2.authorize_button(
         "Login with Google",
         redirect_uri=redirect_uri,
-        scope="openid email profile", 
+        scope="openid email profile",
         key="google_login"
     )
     if result and "token" in result:
         access_token = result["token"]["access_token"]
+        refresh_token = result["token"].get("refresh_token")
         userinfo_response = requests.get(
             "https://openidconnect.googleapis.com/v1/userinfo",
             headers={"Authorization": f"Bearer {access_token}"}
@@ -74,6 +103,9 @@ if "user_email" not in st.session_state:
         user_info = userinfo_response.json()
         st.session_state["user_email"] = user_info["email"]
         st.session_state["access_token"] = access_token
+        if refresh_token:
+            st.session_state["refresh_token"] = refresh_token
+            cookies["refresh_token"] = refresh_token
         cookies["access_token"] = access_token
         cookies.save()
         st.success(f"Logged in as {user_info['email']}")
@@ -87,7 +119,9 @@ else:
             del st.session_state[key]
         if "access_token" in cookies:
             del cookies["access_token"]
-            cookies.save()
+        if "refresh_token" in cookies:
+            del cookies["refresh_token"]
+        cookies.save()
         st.rerun()
 
 # --- Airtable Connection ---
