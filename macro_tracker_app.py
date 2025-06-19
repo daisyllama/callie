@@ -99,12 +99,14 @@ def get_meals_from_airtable(selected_date=None):
     try:
         records = meals_table.all(formula=formula, sort=['-date'])
         if not records:
-            return pd.DataFrame(columns=['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbs (g)'])
+            return pd.DataFrame(columns=['Meal ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)'])
 
         meals_list = []
         for record in records:
             fields = record['fields']
-            meals_list.append({
+            # Mapping fields to a dictionary with consistent column names
+            meals_list.append({  
+                'Meal ID': fields.get('meal_id', None),
                 'Date': pd.to_datetime(fields.get('date')).date() if fields.get('date') else None,
                 'Meal': fields.get('meal', ''),
                 'Calories (kcal)': fields.get('calories_kcal', 0),
@@ -118,13 +120,13 @@ def get_meals_from_airtable(selected_date=None):
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date']).dt.date
         # Reorder columns for display
-        display_cols = ['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)']
+        display_cols = ['Meal ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)']
         df = df[[col for col in display_cols if col in df.columns]]
         return df
     except Exception as e:
         st.error(f"Error fetching meals from Airtable: {e}")
         logging.error(f"Error fetching meals from Airtable: {e}")
-        return pd.DataFrame(columns=['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbs (g)'])
+        return pd.DataFrame(columns=['Meal ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)'])
 
 
 @st.cache_data(ttl=300)
@@ -165,6 +167,8 @@ def update_macro_goals_in_airtable(calories, protein, fat, cholesterol, carbs):
             "carbs_g": carbs
         })
         st.success("Daily macro goals updated in Airtable!")
+        get_macro_goals_from_airtable.clear()
+        st.rerun()
     except Exception as e:
         st.error(f"Error updating goals in Airtable: {e}")
         logging.error(f"Error updating goals in Airtable: {e}")
@@ -391,7 +395,7 @@ st.header("All Logged Meals")
 all_meals_df = get_meals_from_airtable()
 
 # Ensure DataFrame always has the correct columns for sorting and display
-expected_cols = ['ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)']
+expected_cols = ['Meal ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)']
 for col in expected_cols:
     if col not in all_meals_df.columns:
         all_meals_df[col] = pd.Series(dtype='object')
@@ -399,7 +403,7 @@ all_meals_df = all_meals_df[expected_cols]
 
 # Sort by Date descending, then by Airtable 'ID' descending
 if not all_meals_df.empty:
-    all_meals_df = all_meals_df.sort_values(by=['Date', 'ID'], ascending=[False, False])
+    all_meals_df = all_meals_df.sort_values(by='Meal ID', ascending=False)
 
 if not all_meals_df.empty:
     st.dataframe(all_meals_df, use_container_width=True)
@@ -414,3 +418,70 @@ if not all_meals_df.empty:
         file_name="macro_tracker_data.csv",
         mime="text/csv",
     )
+
+
+st.header("Update a Logged Meal")
+with st.form("update_meal_form", clear_on_submit=True):
+    update_meal_id = st.text_input("Meal ID (required)", value="", placeholder="Enter Meal ID")
+    update_meal_name = st.text_input("Meal Name", value="", placeholder="Leave blank to keep unchanged")
+    row3_col1, row3_col2, row3_col3, row3_col4, row3_col5 = st.columns(5)
+    with row3_col1:
+        update_calories = st.text_input("Calories (kcal)", value="", placeholder="Leave blank to keep unchanged")
+    with row3_col2:
+        update_protein = st.text_input("Protein (g)", value="", placeholder="Leave blank to keep unchanged")
+    with row3_col3:
+        update_fat = st.text_input("Fat (g)", value="", placeholder="Leave blank to keep unchanged")
+    with row3_col4:
+        update_cholesterol = st.text_input("Cholesterol (mg)", value="", placeholder="Leave blank to keep unchanged")
+    with row3_col5:
+        update_carbs = st.text_input("Carbohydrates (g)", value="", placeholder="Leave blank to keep unchanged")
+    update_btn = st.form_submit_button("Update Meal")
+
+    if update_btn:
+        if not update_meal_id.strip():
+            st.error("Meal ID is required.")
+        else:
+            # Find the Airtable record with this meal_id
+            records = meals_table.all(formula=f"{{meal_id}} = {update_meal_id.strip()}", max_records=1)
+            if not records:
+                st.error(f"No meal found with Meal ID {update_meal_id.strip()}.")
+            else:
+                record_id = records[0]['id']
+                update_fields = {}
+                if update_meal_name.strip():
+                    update_fields['meal'] = update_meal_name.strip()
+                if update_calories.strip():
+                    try:
+                        update_fields['calories_kcal'] = float(update_calories.strip())
+                    except Exception:
+                        st.error("Calories must be a number.")
+                if update_protein.strip():
+                    try:
+                        update_fields['protein_g'] = float(update_protein.strip())
+                    except Exception:
+                        st.error("Protein must be a number.")
+                if update_fat.strip():
+                    try:
+                        update_fields['fat_g'] = float(update_fat.strip())
+                    except Exception:
+                        st.error("Fat must be a number.")
+                if update_cholesterol.strip():
+                    try:
+                        update_fields['cholesterol_mg'] = float(update_cholesterol.strip())
+                    except Exception:
+                        st.error("Cholesterol must be a number.")
+                if update_carbs.strip():
+                    try:
+                        update_fields['carbs_g'] = float(update_carbs.strip())
+                    except Exception:
+                        st.error("Carbohydrates must be a number.")
+                if not update_fields:
+                    st.warning("No fields to update.")
+                else:
+                    try:
+                        meals_table.update(record_id, update_fields)
+                        st.success(f"Meal {update_meal_id.strip()} updated!")
+                        get_meals_from_airtable.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error updating meal: {e}")
