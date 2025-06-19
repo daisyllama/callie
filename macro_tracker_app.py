@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date, timedelta, timezone
-import pytz
-from pyairtable import Table
 import logging
-import plotly.graph_objects as go
-from streamlit_oauth import OAuth2Component
+from pyairtable import Table
 import requests
-from streamlit_cookies_manager import EncryptedCookieManager
+import pytz
+import plotly.graph_objects as go
+from datetime import datetime, date, timedelta, timezone
 
 # --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
 APP_TITLE = "Daily Macro Tracker"
@@ -21,108 +19,6 @@ logging.basicConfig(
     level=logging.ERROR,  # Change to logging.INFO for more details
     format='%(asctime)s %(levelname)s:%(message)s'
 )
-
-# --- Set up cookies manager for persistent login ---
-cookies = EncryptedCookieManager(
-    prefix="macrotracker_",
-    password=st.secrets.get("COOKIE_SECRET", "changeme")
-)
-
-# Set up your Google OAuth credentials in Streamlit secrets
-client_id = st.secrets["GOOGLE_CLIENT_ID"]
-client_secret = st.secrets["GOOGLE_CLIENT_SECRET"]
-redirect_uri = st.secrets["GOOGLE_REDIRECT_URI"]
-
-# debug
-# st.info(f"Redirect URI: {redirect_uri}")
-
-oauth2 = OAuth2Component(
-    client_id=client_id,
-    client_secret=client_secret,
-    authorize_endpoint="https://accounts.google.com/o/oauth2/v2/auth",
-    token_endpoint="https://oauth2.googleapis.com/token",
-    revoke_token_endpoint="https://oauth2.googleapis.com/revoke"
-)
-
-# --- Google OAuth Login/Logout Logic ---
-# Try to restore tokens from cookie
-if "access_token" not in st.session_state and "access_token" in cookies:
-    st.session_state["access_token"] = cookies["access_token"]
-if "refresh_token" not in st.session_state and "refresh_token" in cookies:
-    st.session_state["refresh_token"] = cookies["refresh_token"]
-
-# Helper to refresh access token
-import time
-
-def refresh_access_token(refresh_token):
-    token_url = "https://oauth2.googleapis.com/token"
-    data = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-        "grant_type": "refresh_token"
-    }
-    resp = requests.post(token_url, data=data)
-    if resp.status_code == 200:
-        token_data = resp.json()
-        return token_data.get("access_token"), token_data.get("expires_in", 86400)
-    return None, None
-
-# If we have a refresh_token but no access_token, try to refresh
-if "refresh_token" in st.session_state and "access_token" not in st.session_state:
-    new_token, expires_in = refresh_access_token(st.session_state["refresh_token"])
-    if new_token:
-        st.session_state["access_token"] = new_token
-        cookies["access_token"] = new_token
-        cookies.save()
-
-# Try to fetch user info if not already present
-if "access_token" in st.session_state and "user_email" not in st.session_state:
-    userinfo_response = requests.get(
-        "https://openidconnect.googleapis.com/v1/userinfo",
-        headers={"Authorization": f"Bearer {st.session_state['access_token']}"}
-    )
-    if userinfo_response.status_code == 200:
-        user_info = userinfo_response.json()
-        st.session_state["user_email"] = user_info["email"]
-
-if "user_email" not in st.session_state:
-    result = oauth2.authorize_button(
-        "Login with Google",
-        redirect_uri=redirect_uri,
-        scope="openid email profile",
-        key="google_login"
-    )
-    if result and "token" in result:
-        access_token = result["token"]["access_token"]
-        refresh_token = result["token"].get("refresh_token")
-        userinfo_response = requests.get(
-            "https://openidconnect.googleapis.com/v1/userinfo",
-            headers={"Authorization": f"Bearer {access_token}"}
-        )
-        user_info = userinfo_response.json()
-        st.session_state["user_email"] = user_info["email"]
-        st.session_state["access_token"] = access_token
-        if refresh_token:
-            st.session_state["refresh_token"] = refresh_token
-            cookies["refresh_token"] = refresh_token
-        cookies["access_token"] = access_token
-        cookies.save()
-        st.success(f"Logged in as {user_info['email']}")
-        st.rerun()
-    else:
-        st.stop()
-else:
-    st.success(f"Logged in as {st.session_state['user_email']}")
-    if st.button("Logout"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        if "access_token" in cookies:
-            del cookies["access_token"]
-        if "refresh_token" in cookies:
-            del cookies["refresh_token"]
-        cookies.save()
-        st.rerun()
 
 # --- Airtable Connection ---
 @st.cache_resource
@@ -144,8 +40,8 @@ def get_airtable_tables():
         # st.success("Connected to Airtable successfully!") # REMOVED: Cannot be before set_page_config
         return meals_table, goals_table
     except Exception as e:
-        st.error(f"Error connecting to Airtable: {e}. . Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/")
-        logging.error(f"Error connecting to Airtable: {e}. . Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/")
+        st.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
+        logging.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
         st.stop()
 
 # Get the Airtable table objects at application startup
@@ -160,17 +56,15 @@ def initialise_airtable_goals():
     If not, it creates a default goal record for that user.
     """
     try:
-        user_email = st.session_state.get("user_email", "demo@example.com")
-        existing_goals = goals_table.all(formula=f"{{user_email}} = '{user_email}'", max_records=1)
+        existing_goals = goals_table.all(max_records=1)
         if not existing_goals:
-            st.info("No macro goals found in Airtable for this user. Setting up default goals...")
+            st.info("No macro goals found in Airtable. Setting up default goals...")
             goals_table.create({
                 "calories_kcal": 2000,
                 "protein_g": 150,
                 "fat_g": 70,
                 "cholesterol_mg": 300,
-                "carbs_g": 250,
-                "user_email": user_email
+                "carbs_g": 250
             })
             st.success("Default goals have been set in Airtable!")
             get_macro_goals_from_airtable.clear()
@@ -188,8 +82,7 @@ def save_meal_to_airtable(meal_date, meal_name, calories, protein, fat, choleste
             "protein_g": protein,
             "fat_g": fat,
             "cholesterol_mg": cholesterol,
-            "carbs_g": carbs,
-            "user_email": st.session_state.get("user_email", "demo@example.com")
+            "carbs_g": carbs
         })
         # Success message shown later with st.rerun
     except Exception as e:
@@ -199,15 +92,14 @@ def save_meal_to_airtable(meal_date, meal_name, calories, protein, fat, choleste
 @st.cache_data(ttl=300)
 def get_meals_from_airtable(selected_date=None):
     """Retrieves meal data from Airtable, optionally filtered by a specific date."""
-    user_email = st.session_state.get("user_email", "demo@example.com")
     if selected_date:
-        formula = f"AND({{user_email}} = '{user_email}', IS_SAME({{date}}, '{selected_date.strftime('%Y-%m-%d')}'))"
+        formula = f"IS_SAME({{date}}, '{selected_date.strftime('%Y-%m-%d')}')"
     else:
-        formula = f"{{user_email}} = '{user_email}'"
+        formula = None
     try:
         records = meals_table.all(formula=formula, sort=['-date'])
         if not records:
-            return pd.DataFrame(columns=['date', 'meal', 'calories_kcal', 'protein_g', 'carbs_g', 'fat_g'])
+            return pd.DataFrame(columns=['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbs (g)'])
 
         meals_list = []
         for record in records:
@@ -232,15 +124,14 @@ def get_meals_from_airtable(selected_date=None):
     except Exception as e:
         st.error(f"Error fetching meals from Airtable: {e}")
         logging.error(f"Error fetching meals from Airtable: {e}")
-        return pd.DataFrame(columns=['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)'])
+        return pd.DataFrame(columns=['Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbs (g)'])
 
 
 @st.cache_data(ttl=300)
 def get_macro_goals_from_airtable():
     """Retrieves the single macro goals record from the Airtable 'Goals' table."""
-    user_email = st.session_state.get("user_email", "demo@example.com")
     try:
-        records = goals_table.all(formula=f"{{user_email}} = '{user_email}'", max_records=1)
+        records = goals_table.all(max_records=1)
         if records:
             fields = records[0]['fields']
             st.session_state['goals_record_id'] = records[0]['id']
@@ -261,11 +152,11 @@ def get_macro_goals_from_airtable():
 def update_macro_goals_in_airtable(calories, protein, fat, cholesterol, carbs):
     """Updates the macro goals in the Airtable 'Goals' table."""
     try:
-        goals_record_id = st.session_state.get('goals_record_id')
-        if not goals_record_id:
-            st.error("Cannot update goals: No existing goals record ID found. Please ensure initial goals are set up in Airtable or refresh the app.")
+        records = goals_table.all(max_records=1)
+        if not records:
+            st.error("No goals record found to update.")
             return
-
+        goals_record_id = records[0]['id']
         goals_table.update(goals_record_id, {
             "calories_kcal": calories,
             "protein_g": protein,
