@@ -6,6 +6,7 @@ import requests
 import pytz
 import plotly.graph_objects as go
 from datetime import datetime, date, timedelta, timezone
+import openai
 
 # --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
 APP_TITLE = "Daily Macro Tracker"
@@ -20,12 +21,26 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s:%(message)s'
 )
 
+# --- OpenAI API Initialization ---
+@st.cache_resource
+def get_openai_client():
+    """Initializes and returns the OpenAI client."""
+    try:
+        openai_api_key = st.secrets.get("OPENAI_API_KEY")
+        if not openai_api_key:
+            st.error("OpenAI API Key not found. Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/.")
+            st.stop()
+        return openai.OpenAI(api_key=openai_api_key)
+    except Exception as e:
+        st.error(f"Error initializing OpenAI client: {e}")
+        st.stop()
+
 # --- Airtable Connection ---
 @st.cache_resource
 def get_airtable_tables():
     """Establishes connection to Airtable and returns Table objects for meals and goals."""
     try:
-        api_key = st.secrets.get("AIRTABLE_API_KEY") # Use .get() to avoid KeyError
+        api_key = st.secrets.get("AIRTABLE_API_KEY") 
         base_id = st.secrets.get("AIRTABLE_BASE_ID")
 
         # Basic check to ensure secrets are loaded
@@ -37,7 +52,6 @@ def get_airtable_tables():
         meals_table = Table(api_key, base_id, "Meals")
         goals_table = Table(api_key, base_id, "Goals")
 
-        # st.success("Connected to Airtable successfully!") # REMOVED: Cannot be before set_page_config
         return meals_table, goals_table
     except Exception as e:
         st.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
@@ -45,8 +59,8 @@ def get_airtable_tables():
         st.stop()
 
 # Get the Airtable table objects at application startup
-# This will now run AFTER set_page_config
 meals_table, goals_table = get_airtable_tables()
+
 
 # --- Database Functions (now Airtable Functions) ---
 
@@ -75,6 +89,12 @@ def initialise_airtable_goals():
 def save_meal_to_airtable(meal_date, meal_name, calories, protein, fat, cholesterol, carbs):
     """Saves a new meal entry to the Airtable 'Meals' table."""
     try:
+        # Default blank macro fields to 0
+        calories = 0 if calories is None else calories
+        protein = 0 if protein is None else protein
+        fat = 0 if fat is None else fat
+        cholesterol = 0 if cholesterol is None else cholesterol
+        carbs = 0 if carbs is None else carbs
         meals_table.create({
             "date": meal_date.strftime("%Y-%m-%d"),
             "meal": meal_name,
@@ -214,13 +234,10 @@ def get_gmt8_today():
     return datetime.now(tz).date()
 
 
-## Streamlit Application Layout
+### Streamlit Application Begin
 
-# Initialize Airtable goals on app startup
-# This will now run AFTER set_page_config
 initialise_airtable_goals()
 
-# Fetch current goals from Airtable for display in sidebar and dashboard
 current_macro_goals = get_macro_goals_from_airtable()
 
 
@@ -306,6 +323,12 @@ with st.form("meal_entry_form", clear_on_submit=True):
         meal_fat_val = parse_number(meal_fat, "Fat (g)")
         meal_cholesterol_val = parse_number(meal_cholesterol, "Cholesterol (mg)")
         meal_carbs_val = parse_number(meal_carbs, "Carbohydrates (g)")
+        # Default blank macro fields to 0
+        meal_calories_val = 0 if meal_calories_val is None else meal_calories_val
+        meal_protein_val = 0 if meal_protein_val is None else meal_protein_val
+        meal_fat_val = 0 if meal_fat_val is None else meal_fat_val
+        meal_cholesterol_val = 0 if meal_cholesterol_val is None else meal_cholesterol_val
+        meal_carbs_val = 0 if meal_carbs_val is None else meal_carbs_val
         for label, value in [
             ("Calories (kcal)", meal_calories_val),
             ("Protein (g)", meal_protein_val),
@@ -313,8 +336,8 @@ with st.form("meal_entry_form", clear_on_submit=True):
             ("Cholesterol (mg)", meal_cholesterol_val),
             ("Carbohydrates (g)", meal_carbs_val)
         ]:
-            if value is None or value < 0:
-                valid = False
+            valid = False if value < 0 else valid
+                
         if valid:
             save_meal_to_airtable(
                 meal_date,
