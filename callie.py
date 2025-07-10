@@ -204,7 +204,6 @@ def get_macros_from_openai(meal_description):
     try:
         logger.info(f"Sending meal description to OpenAI: '{meal_description}'")
         content = extract_macros_from_meal(meal_description)
-        st.code(content, language="text")  # Optionally show raw response for debugging
         logger.info(f"OpenAI raw response: '{content}'")
         return parse_openai_response(content)
     except Exception as e:
@@ -573,3 +572,11 @@ with st.form("update_meal_form", clear_on_submit=True):
                     except Exception as e:
                         st.error(f"Error updating meal: {e}")
                         logger.error(f"Error updating meal {record_id}: {e}")
+
+
+# CLI test block for parse_openai_response
+if __name__ == "__main__":
+    print("Test the macro parser without OpenAI API.")
+    mock_response = "Meal: Chicken Rice with 2 Eggs, Calories: 650kcal, Protein: 40g, Fat: 18g, Cholesterol: 420mg, Carbs: 70g"
+    result = parse_openai_response(mock_response)
+    print("Parsed result:", result)
