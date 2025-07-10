@@ -82,30 +82,7 @@ meals_table, goals_table = get_airtable_tables()
 
 # --- Database Functions (now Airtable Functions) ---
 
-def initialise_airtable_goals():
-    """
-    Ensures there's at least one record in the Goals table for the current user.
-    If not, it creates a default goal record for that user.
-    """
-    try:
-        existing_goals = goals_table.all(max_records=1)
-        if not existing_goals:
-            st.info("No macro goals found in Airtable. Setting up default goals...")
-            goals_table.create({
-                "calories_kcal": 2000,
-                "protein_g": 150,
-                "fat_g": 70,
-                "cholesterol_mg": 300,
-                "carbs_g": 250
-            })
-            st.success("Default goals have been set in Airtable!")
-            logger.info("Default goals created in Airtable.")
-            get_macro_goals_from_airtable.clear()
-        else:
-            logger.info("Macro goals already exist in Airtable.")
-    except Exception as e:
-        st.error(f"Error checking or initialising goals in Airtable: {e}")
-        logger.error(f"Error checking or initialising goals in Airtable: {e}")
+
 
 def save_meal_to_airtable(meal_date, meal_name, calories, protein, fat, cholesterol, carbs):
     """Saves a new meal entry to the Airtable 'Meals' table."""
@@ -149,7 +126,7 @@ def get_meals_from_airtable(selected_date=None):
         for record in records:
             fields = record['fields']
             meals_list.append({
-                'Meal ID': record['id'],
+                'Meal ID': fields.get('meal_id', ''),
                 'Date': pd.to_datetime(fields.get('date')).date() if fields.get('date') else None,
                 'Meal': fields.get('meal', ''),
                 'Calories (kcal)': fields.get('calories_kcal', 0),
@@ -173,53 +150,9 @@ def get_meals_from_airtable(selected_date=None):
 
 
 @st.cache_data(ttl=300)
-def get_macro_goals_from_airtable():
-    """Retrieves the single macro goals record from the Airtable 'Goals' table."""
-    try:
-        records = goals_table.all(max_records=1)
-        if records:
-            fields = records[0]['fields']
-            st.session_state['goals_record_id'] = records[0]['id']
-            goals = {
-                'calories': fields.get('calories_kcal', 2000),
-                'protein': fields.get('protein_g', 150),
-                'fat': fields.get('fat_g', 70),
-                'cholesterol': fields.get('cholesterol_mg', 300),
-                'carbs': fields.get('carbs_g', 250)
-            }
-            logger.info(f"Successfully fetched macro goals: {goals}")
-            return goals
-        else:
-            logger.warning("No macro goals record found in Airtable. Using default goals.")
-            return {'calories': 2000, 'protein': 150, 'fat': 70, 'cholesterol': 300, 'carbs': 250}
-    except Exception as e:
-        st.error(f"Error fetching goals from Airtable: {e}")
-        logger.error(f"Error fetching goals from Airtable: {e}")
-        return {'calories': 2000, 'protein': 150, 'fat': 70, 'cholesterol': 300, 'carbs': 250}
 
-def update_macro_goals_in_airtable(calories, protein, fat, cholesterol, carbs):
-    """Updates the macro goals in the Airtable 'Goals' table."""
-    try:
-        records = goals_table.all(max_records=1)
-        if not records:
-            st.error("No goals record found to update.")
-            logger.error("Attempted to update goals, but no goals record found.")
-            return
-        goals_record_id = records[0]['id']
-        goals_table.update(goals_record_id, {
-            "calories_kcal": calories,
-            "protein_g": protein,
-            "fat_g": fat,
-            "cholesterol_mg": cholesterol,
-            "carbs_g": carbs
-        })
-        st.success("Daily macro goals updated in Airtable!")
-        logger.info(f"Macro goals updated in Airtable. New goals: Cals={calories}, Prot={protein}, Fat={fat}, Chol={cholesterol}, Carbs={carbs}")
-        get_macro_goals_from_airtable.clear()
-        st.rerun()
-    except Exception as e:
-        st.error(f"Error updating goals in Airtable: {e}")
-        logger.error(f"Error updating goals in Airtable: {e}")
+
+
 
 
 def display_progress(label, current, goal, unit):
@@ -267,19 +200,11 @@ def get_macros_from_openai(meal_description):
     Sends a meal description to OpenAI GPT and extracts macro information.
     The prompt is designed to encourage a JSON-like output for easier parsing.
     """
-    client = get_openai_client()
+    from openai_api import extract_macros_from_meal
     try:
         logger.info(f"Sending meal description to OpenAI: '{meal_description}'")
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that extracts macro nutrient information from meal descriptions. Provide the output in a structured format. If a macro is not mentioned, assume 0. Output only the key-value pairs, no extra text. Example: 'Meal: Grilled Chicken Salad, Calories: 350, Protein: 40g, Fat: 15g, Cholesterol: 80mg, Carbs: 20g'"},
-                {"role": "user", "content": f"Extract macros for: {meal_description}"}
-            ],
-            temperature=0.1,
-            max_tokens=150
-        )
-        content = response.choices[0].message.content.strip()
+        content = extract_macros_from_meal(meal_description)
+        st.code(content, language="text")  # Optionally show raw response for debugging
         logger.info(f"OpenAI raw response: '{content}'")
         return parse_openai_response(content)
     except Exception as e:
@@ -328,60 +253,34 @@ def parse_openai_response(response_text):
 
 ### Streamlit Application Begin
 
-initialise_airtable_goals()
-
-current_macro_goals = get_macro_goals_from_airtable()
 
 
-### Set Your Daily Macro Goals
 
-st.sidebar.header("Set Your Daily Macro Goals")
-with st.sidebar.form("macro_goal_form"):
-    new_calories_goal = st.number_input(
-        "Calories (kcal)",
-        min_value=0,
-        value=current_macro_goals['calories'],
-        step=50
-    )
-    new_protein_goal = st.number_input(
-        "Protein (g)",
-        min_value=0,
-        value=current_macro_goals['protein'],
-        step=5
-    )
-    new_fat_goal = st.number_input(
-        "Fat (g)",
-        min_value=0,
-        value=current_macro_goals['fat'],
-        step=5
-    )
-    new_cholesterol_goal = st.number_input(
-        "Cholesterol (mg)",
-        min_value=0,
-        value=current_macro_goals['cholesterol'],
-        step=5
-    )
-    new_carbs_goal = st.number_input(
-        "Carbohydrates (g)",
-        min_value=0,
-        value=current_macro_goals['carbs'],
-        step=5
-    )
-    if st.form_submit_button("Update Goals"):
-        update_macro_goals_in_airtable(new_calories_goal, new_protein_goal, new_fat_goal, new_cholesterol_goal, new_carbs_goal)
-        get_macro_goals_from_airtable.clear()
-        st.rerun()
+### Set Your Daily Macro Goals (Read Only Sidebar)
+
+st.sidebar.header("Daily Macro Goals")
+st.sidebar.info(
+    f"""
+    **Calories:** 1700 kcal  
+    **Protein:** 100 g  
+    **Fat:** 55 g  
+    **Cholesterol:** 300 mg  
+    **Carbohydrates:** 220 g
+    """
+)
+
+# Remove or comment out the macro_goal_form and update logic from the sidebar
 
 # --- ChatGPT Integration Section ---
-st.header("Log Meals with AI (ChatGPT)")
-st.info("Describe your meal in natural language, and AI will extract the macro details for you! e.g., 'I had a large pepperoni pizza slice with 300 calories, 15g protein, 20g fat, 40mg cholesterol, and 30g carbs for dinner.'")
+st.header("Consult Callie")
+st.info("Tell me what you ate you fat fuck and i'll make you regret it.")
 
 with st.form("ai_meal_entry_form", clear_on_submit=True):
     ai_meal_description = st.text_area("Describe your meal", height=100)
-    process_ai_meal_button = st.form_submit_button("Extract Macros with AI")
+    process_ai_meal_button = st.form_submit_button("Fill me with shame.")
 
     if process_ai_meal_button and ai_meal_description:
-        with st.spinner("Asking AI to extract macros..."):
+        with st.spinner("Shaming..."):
             meal_name_ai, calories_ai, protein_ai, fat_ai, cholesterol_ai, carbs_ai = get_macros_from_openai(ai_meal_description)
 
         if meal_name_ai is not None:
@@ -391,14 +290,16 @@ with st.form("ai_meal_entry_form", clear_on_submit=True):
             st.session_state['meal_fat_ai'] = fat_ai if fat_ai is not None else ""
             st.session_state['meal_cholesterol_ai'] = cholesterol_ai if cholesterol_ai is not None else ""
             st.session_state['meal_carbs_ai'] = carbs_ai if carbs_ai is not None else ""
-            st.success("Macros extracted by AI! You can now review and add them below.")
+            st.success("Look at your macros! Are you happy now?")
         else:
-            st.error("Could not extract macros from the description. Please try a different description or enter manually.")
+            st.error("Error. Please try a different description or enter manually.")
     elif process_ai_meal_button and not ai_meal_description:
-        st.warning("Please enter a meal description for AI extraction.")
+        st.warning("Enter a meal you dumb fuck.")
 
 st.header("Log Your Meals")
 
+
+# Initialize session state for meal fields if not present
 if 'meal_name_ai' not in st.session_state:
     st.session_state['meal_name_ai'] = ""
     st.session_state['meal_calories_ai'] = ""
@@ -406,6 +307,39 @@ if 'meal_name_ai' not in st.session_state:
     st.session_state['meal_fat_ai'] = ""
     st.session_state['meal_cholesterol_ai'] = ""
     st.session_state['meal_carbs_ai'] = ""
+
+# --- Helper Buttons for Common Meals ---
+st.markdown("**Quick Add Common Meals:**")
+col_quickadd1, col_quickadd2, col_quickadd3, _ = st.columns([1, 1, 1, 3])
+with col_quickadd1:
+    if st.button("Protein shake"):
+        st.session_state['meal_name_ai'] = "Protein shake (1 scoop)"
+        st.session_state['meal_calories_ai'] = "120"
+        st.session_state['meal_protein_ai'] = "24"
+        st.session_state['meal_fat_ai'] = "1.5"
+        st.session_state['meal_cholesterol_ai'] = "55"
+        st.session_state['meal_carbs_ai'] = "3"
+        st.rerun()
+with col_quickadd2:
+    if st.button("Common Meal 2"):
+        # TODO: Add other common meals later
+        st.session_state['meal_name_ai'] = "Common Meal 2"
+        st.session_state['meal_calories_ai'] = ""
+        st.session_state['meal_protein_ai'] = ""
+        st.session_state['meal_fat_ai'] = ""
+        st.session_state['meal_cholesterol_ai'] = ""
+        st.session_state['meal_carbs_ai'] = ""
+        st.rerun()
+with col_quickadd3:
+    if st.button("Common Meal 3"):
+        # TODO: Add other common meals later
+        st.session_state['meal_name_ai'] = "Common Meal 3"
+        st.session_state['meal_calories_ai'] = ""
+        st.session_state['meal_protein_ai'] = ""
+        st.session_state['meal_fat_ai'] = ""
+        st.session_state['meal_cholesterol_ai'] = ""
+        st.session_state['meal_carbs_ai'] = ""
+        st.rerun()
 
 with st.form("meal_entry_form", clear_on_submit=True):
     meal_name = st.text_input("Meal Name", value=st.session_state['meal_name_ai'], placeholder="e.g., Chonky Chicken Salad")
@@ -478,11 +412,7 @@ with st.form("meal_entry_form", clear_on_submit=True):
 ## Daily Macro Dashboard
 
 st.header("Daily Macro Dashboard")
-if st.button("🔄 Refresh Dashboard"):
-    get_meals_from_airtable.clear()
-    get_macro_goals_from_airtable.clear()
-    logger.info("Dashboard refreshed.")
-    st.rerun()
+
 
 selected_date_dashboard = st.date_input("View Dashboard for Date", value=get_gmt8_today())
 
@@ -494,7 +424,13 @@ total_fat_today = daily_meals_df.get('Fat (g)', pd.Series(dtype=float)).sum()
 total_cholesterol_today = daily_meals_df.get('Cholesterol (mg)', pd.Series(dtype=float)).sum()
 total_carbs_today = daily_meals_df.get('Carbohydrates (g)', pd.Series(dtype=float)).sum()
 
-goals_for_display = get_macro_goals_from_airtable()
+goals_for_display = {
+    'calories': 1700,
+    'protein': 100,
+    'fat': 55,
+    'cholesterol': 300,
+    'carbs': 220
+}
 
 st.subheader(f"Progress for {selected_date_dashboard.strftime('%B %d, %Y')}")
 
