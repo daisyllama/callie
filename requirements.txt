@@ -5,3 +5,5 @@ plotly
 pytz
 streamlit-oauth
 streamlit-cookies-manager
+openai
+streamlit-chat

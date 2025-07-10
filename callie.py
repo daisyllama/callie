@@ -7,19 +7,34 @@ import pytz
 import plotly.graph_objects as go
 from datetime import datetime, date, timedelta, timezone
 import openai
+import re
+import sys # Import the sys module
 
 # --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
 APP_TITLE = "Daily Macro Tracker"
 st.set_page_config(layout="wide", page_title=APP_TITLE)
 
-st.title(APP_TITLE) # You can put st.title here, it's also a Streamlit command
+st.title(APP_TITLE)
 
-# Set up logging to file
-logging.basicConfig(
-    filename='app.log',
-    level=logging.ERROR,  # Change to logging.INFO for more details
-    format='%(asctime)s %(levelname)s:%(message)s'
-)
+# --- Set up logging to standard output ---
+# Get the root logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO) # Change to DEBUG to see more logs
+
+# Remove any existing handlers to prevent duplicate logs if this code runs multiple times
+if logger.handlers:
+    for handler in logger.handlers:
+        logger.removeHandler(handler)
+
+# Create a StreamHandler to output to sys.stdout
+handler = logging.StreamHandler(sys.stdout)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+# You can also set specific loggers for your modules if needed
+logging.info("Application started and logging configured to standard output.")
+
 
 # --- OpenAI API Initialization ---
 @st.cache_resource
@@ -29,10 +44,12 @@ def get_openai_client():
         openai_api_key = st.secrets.get("OPENAI_API_KEY")
         if not openai_api_key:
             st.error("OpenAI API Key not found. Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/.")
+            logger.error("OpenAI API Key not found.")
             st.stop()
         return openai.OpenAI(api_key=openai_api_key)
     except Exception as e:
         st.error(f"Error initializing OpenAI client: {e}")
+        logger.error(f"Error initializing OpenAI client: {e}")
         st.stop()
 
 # --- Airtable Connection ---
@@ -40,22 +57,23 @@ def get_openai_client():
 def get_airtable_tables():
     """Establishes connection to Airtable and returns Table objects for meals and goals."""
     try:
-        api_key = st.secrets.get("AIRTABLE_API_KEY") 
+        api_key = st.secrets.get("AIRTABLE_API_KEY")
         base_id = st.secrets.get("AIRTABLE_BASE_ID")
 
         # Basic check to ensure secrets are loaded
         if not api_key or not base_id:
             st.error("Airtable API Key or Base ID not found. Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/.")
-            logging.error("Airtable API Key or Base ID not found. Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/.")
-            st.stop() # Stop the app if credentials are missing
+            logger.error("Airtable API Key or Base ID not found.")
+            st.stop()
 
         meals_table = Table(api_key, base_id, "Meals")
         goals_table = Table(api_key, base_id, "Goals")
 
+        logger.info("Successfully connected to Airtable.")
         return meals_table, goals_table
     except Exception as e:
         st.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
-        logging.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
+        logger.error(f"Error connecting to Airtable: {e}.")
         st.stop()
 
 # Get the Airtable table objects at application startup
@@ -81,15 +99,17 @@ def initialise_airtable_goals():
                 "carbs_g": 250
             })
             st.success("Default goals have been set in Airtable!")
+            logger.info("Default goals created in Airtable.")
             get_macro_goals_from_airtable.clear()
+        else:
+            logger.info("Macro goals already exist in Airtable.")
     except Exception as e:
         st.error(f"Error checking or initialising goals in Airtable: {e}")
-        logging.error(f"Error checking or initialising goals in Airtable: {e}")
+        logger.error(f"Error checking or initialising goals in Airtable: {e}")
 
 def save_meal_to_airtable(meal_date, meal_name, calories, protein, fat, cholesterol, carbs):
     """Saves a new meal entry to the Airtable 'Meals' table."""
     try:
-        # Default blank macro fields to 0
         calories = 0 if calories is None else calories
         protein = 0 if protein is None else protein
         fat = 0 if fat is None else fat
@@ -104,29 +124,32 @@ def save_meal_to_airtable(meal_date, meal_name, calories, protein, fat, choleste
             "cholesterol_mg": cholesterol,
             "carbs_g": carbs
         })
-        # Success message shown later with st.rerun
+        logger.info(f"Meal '{meal_name}' for {meal_date.strftime('%Y-%m-%d')} saved to Airtable.")
     except Exception as e:
         st.error(f"Error adding meal to Airtable: {e}")
-        logging.error(f"Error adding meal to Airtable: {e}")
+        logger.error(f"Error adding meal to Airtable: {e}")
 
 @st.cache_data(ttl=300)
 def get_meals_from_airtable(selected_date=None):
     """Retrieves meal data from Airtable, optionally filtered by a specific date."""
+    formula = None
     if selected_date:
         formula = f"IS_SAME({{date}}, '{selected_date.strftime('%Y-%m-%d')}')"
+        logger.info(f"Fetching meals from Airtable for date: {selected_date.strftime('%Y-%m-%d')} with formula: {formula}")
     else:
-        formula = None
+        logger.info("Fetching all meals from Airtable.")
+
     try:
         records = meals_table.all(formula=formula, sort=['-date'])
         if not records:
+            logger.info("No meal records found in Airtable for the given criteria.")
             return pd.DataFrame(columns=['Meal ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)'])
 
         meals_list = []
         for record in records:
             fields = record['fields']
-            # Mapping fields to a dictionary with consistent column names
-            meals_list.append({  
-                'Meal ID': fields.get('meal_id', None),
+            meals_list.append({
+                'Meal ID': record['id'],
                 'Date': pd.to_datetime(fields.get('date')).date() if fields.get('date') else None,
                 'Meal': fields.get('meal', ''),
                 'Calories (kcal)': fields.get('calories_kcal', 0),
@@ -137,15 +160,15 @@ def get_meals_from_airtable(selected_date=None):
             })
 
         df = pd.DataFrame(meals_list)
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date']).dt.date
-        # Reorder columns for display
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date']).dt.date
         display_cols = ['Meal ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)']
         df = df[[col for col in display_cols if col in df.columns]]
+        logger.info(f"Successfully fetched {len(df)} meal records from Airtable.")
         return df
     except Exception as e:
         st.error(f"Error fetching meals from Airtable: {e}")
-        logging.error(f"Error fetching meals from Airtable: {e}")
+        logger.error(f"Error fetching meals from Airtable: {e}")
         return pd.DataFrame(columns=['Meal ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)'])
 
 
@@ -157,18 +180,21 @@ def get_macro_goals_from_airtable():
         if records:
             fields = records[0]['fields']
             st.session_state['goals_record_id'] = records[0]['id']
-            return {
+            goals = {
                 'calories': fields.get('calories_kcal', 2000),
                 'protein': fields.get('protein_g', 150),
                 'fat': fields.get('fat_g', 70),
                 'cholesterol': fields.get('cholesterol_mg', 300),
                 'carbs': fields.get('carbs_g', 250)
             }
+            logger.info(f"Successfully fetched macro goals: {goals}")
+            return goals
         else:
+            logger.warning("No macro goals record found in Airtable. Using default goals.")
             return {'calories': 2000, 'protein': 150, 'fat': 70, 'cholesterol': 300, 'carbs': 250}
     except Exception as e:
         st.error(f"Error fetching goals from Airtable: {e}")
-        logging.error(f"Error fetching goals from Airtable: {e}")
+        logger.error(f"Error fetching goals from Airtable: {e}")
         return {'calories': 2000, 'protein': 150, 'fat': 70, 'cholesterol': 300, 'carbs': 250}
 
 def update_macro_goals_in_airtable(calories, protein, fat, cholesterol, carbs):
@@ -177,6 +203,7 @@ def update_macro_goals_in_airtable(calories, protein, fat, cholesterol, carbs):
         records = goals_table.all(max_records=1)
         if not records:
             st.error("No goals record found to update.")
+            logger.error("Attempted to update goals, but no goals record found.")
             return
         goals_record_id = records[0]['id']
         goals_table.update(goals_record_id, {
@@ -187,11 +214,12 @@ def update_macro_goals_in_airtable(calories, protein, fat, cholesterol, carbs):
             "carbs_g": carbs
         })
         st.success("Daily macro goals updated in Airtable!")
+        logger.info(f"Macro goals updated in Airtable. New goals: Cals={calories}, Prot={protein}, Fat={fat}, Chol={cholesterol}, Carbs={carbs}")
         get_macro_goals_from_airtable.clear()
         st.rerun()
     except Exception as e:
         st.error(f"Error updating goals in Airtable: {e}")
-        logging.error(f"Error updating goals in Airtable: {e}")
+        logger.error(f"Error updating goals in Airtable: {e}")
 
 
 def display_progress(label, current, goal, unit):
@@ -233,6 +261,70 @@ def get_gmt8_today():
     tz = pytz.timezone('Asia/Singapore')  # GMT+8
     return datetime.now(tz).date()
 
+# --- OpenAI Integration Functions ---
+def get_macros_from_openai(meal_description):
+    """
+    Sends a meal description to OpenAI GPT and extracts macro information.
+    The prompt is designed to encourage a JSON-like output for easier parsing.
+    """
+    client = get_openai_client()
+    try:
+        logger.info(f"Sending meal description to OpenAI: '{meal_description}'")
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that extracts macro nutrient information from meal descriptions. Provide the output in a structured format. If a macro is not mentioned, assume 0. Output only the key-value pairs, no extra text. Example: 'Meal: Grilled Chicken Salad, Calories: 350, Protein: 40g, Fat: 15g, Cholesterol: 80mg, Carbs: 20g'"},
+                {"role": "user", "content": f"Extract macros for: {meal_description}"}
+            ],
+            temperature=0.1,
+            max_tokens=150
+        )
+        content = response.choices[0].message.content.strip()
+        logger.info(f"OpenAI raw response: '{content}'")
+        return parse_openai_response(content)
+    except Exception as e:
+        st.error(f"Error communicating with OpenAI: {e}")
+        logger.error(f"Error communicating with OpenAI: {e}")
+        return None, None, None, None, None, None
+
+def parse_openai_response(response_text):
+    """
+    Parses the text response from OpenAI to extract meal name and macro values.
+    Uses regex to find key-value pairs.
+    """
+    meal_name = ""
+    calories = None
+    protein = None
+    fat = None
+    cholesterol = None
+    carbs = None
+
+    meal_match = re.search(r"Meal:\s*(.*?)(?:,|$)", response_text, re.IGNORECASE)
+    if meal_match:
+        meal_name = meal_match.group(1).strip()
+
+    calories_match = re.search(r"Calories:\s*(\d+)", response_text, re.IGNORECASE)
+    if calories_match:
+        calories = int(calories_match.group(1))
+
+    protein_match = re.search(r"Protein:\s*(\d+)g", response_text, re.IGNORECASE)
+    if protein_match:
+        protein = int(protein_match.group(1))
+
+    fat_match = re.search(r"Fat:\s*(\d+)g", response_text, re.IGNORECASE)
+    if fat_match:
+        fat = int(fat_match.group(1))
+
+    cholesterol_match = re.search(r"Cholesterol:\s*(\d+)mg", response_text, re.IGNORECASE)
+    if cholesterol_match:
+        cholesterol = int(cholesterol_match.group(1))
+
+    carbs_match = re.search(r"Carbs:\s*(\d+)g", response_text, re.IGNORECASE)
+    if carbs_match:
+        carbs = int(carbs_match.group(1))
+
+    logger.info(f"Parsed OpenAI response: Meal='{meal_name}', Cals={calories}, Prot={protein}, Fat={fat}, Chol={cholesterol}, Carbs={carbs}")
+    return meal_name, calories, protein, fat, cholesterol, carbs
 
 ### Streamlit Application Begin
 
@@ -280,25 +372,55 @@ with st.sidebar.form("macro_goal_form"):
         get_macro_goals_from_airtable.clear()
         st.rerun()
 
+# --- ChatGPT Integration Section ---
+st.header("Log Meals with AI (ChatGPT)")
+st.info("Describe your meal in natural language, and AI will extract the macro details for you! e.g., 'I had a large pepperoni pizza slice with 300 calories, 15g protein, 20g fat, 40mg cholesterol, and 30g carbs for dinner.'")
 
-### Log Your Meals
+with st.form("ai_meal_entry_form", clear_on_submit=True):
+    ai_meal_description = st.text_area("Describe your meal", height=100)
+    process_ai_meal_button = st.form_submit_button("Extract Macros with AI")
+
+    if process_ai_meal_button and ai_meal_description:
+        with st.spinner("Asking AI to extract macros..."):
+            meal_name_ai, calories_ai, protein_ai, fat_ai, cholesterol_ai, carbs_ai = get_macros_from_openai(ai_meal_description)
+
+        if meal_name_ai is not None:
+            st.session_state['meal_name_ai'] = meal_name_ai
+            st.session_state['meal_calories_ai'] = calories_ai if calories_ai is not None else ""
+            st.session_state['meal_protein_ai'] = protein_ai if protein_ai is not None else ""
+            st.session_state['meal_fat_ai'] = fat_ai if fat_ai is not None else ""
+            st.session_state['meal_cholesterol_ai'] = cholesterol_ai if cholesterol_ai is not None else ""
+            st.session_state['meal_carbs_ai'] = carbs_ai if carbs_ai is not None else ""
+            st.success("Macros extracted by AI! You can now review and add them below.")
+        else:
+            st.error("Could not extract macros from the description. Please try a different description or enter manually.")
+    elif process_ai_meal_button and not ai_meal_description:
+        st.warning("Please enter a meal description for AI extraction.")
 
 st.header("Log Your Meals")
 
+if 'meal_name_ai' not in st.session_state:
+    st.session_state['meal_name_ai'] = ""
+    st.session_state['meal_calories_ai'] = ""
+    st.session_state['meal_protein_ai'] = ""
+    st.session_state['meal_fat_ai'] = ""
+    st.session_state['meal_cholesterol_ai'] = ""
+    st.session_state['meal_carbs_ai'] = ""
+
 with st.form("meal_entry_form", clear_on_submit=True):
-    meal_name = st.text_input("Meal Name", placeholder="e.g., Chonky Chicken Salad")
+    meal_name = st.text_input("Meal Name", value=st.session_state['meal_name_ai'], placeholder="e.g., Chonky Chicken Salad")
     meal_date = st.date_input("Date", value=get_gmt8_today())
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        meal_calories = st.text_input("Calories (kcal)", value="", placeholder="e.g. 350")
+        meal_calories = st.text_input("Calories (kcal)", value=str(st.session_state['meal_calories_ai']), placeholder="e.g. 350")
     with col2:
-        meal_protein = st.text_input("Protein (g)", value="", placeholder="e.g. 25")
+        meal_protein = st.text_input("Protein (g)", value=str(st.session_state['meal_protein_ai']), placeholder="e.g. 25")
     with col3:
-        meal_fat = st.text_input("Fat (g)", value="", placeholder="e.g. 10")
+        meal_fat = st.text_input("Fat (g)", value=str(st.session_state['meal_fat_ai']), placeholder="e.g. 10")
     with col4:
-        meal_cholesterol = st.text_input("Cholesterol (mg)", value="", placeholder="e.g. 50")
+        meal_cholesterol = st.text_input("Cholesterol (mg)", value=str(st.session_state['meal_cholesterol_ai']), placeholder="e.g. 50")
     with col5:
-        meal_carbs = st.text_input("Carbohydrates (g)", value="", placeholder="e.g. 40")
+        meal_carbs = st.text_input("Carbohydrates (g)", value=str(st.session_state['meal_carbs_ai']), placeholder="e.g. 40")
 
     if st.form_submit_button("Add Meal"):
         valid = True
@@ -306,38 +428,29 @@ with st.form("meal_entry_form", clear_on_submit=True):
         if not meal_name:
             valid = False
             error_msgs.append("Meal name is required.")
+
         def parse_number(value, label):
             try:
-                value = value.strip()
+                value = str(value).strip() # Ensure value is a string before stripping
                 if value == '':
+                    return 0
+                parsed_value = float(value)
+                if parsed_value < 0:
                     raise ValueError
-                value = float(value)
-                if value < 0:
-                    raise ValueError
-                return value
+                return parsed_value
             except Exception:
                 error_msgs.append(f"{label} must be a non-negative number.")
                 return None
+
         meal_calories_val = parse_number(meal_calories, "Calories (kcal)")
         meal_protein_val = parse_number(meal_protein, "Protein (g)")
         meal_fat_val = parse_number(meal_fat, "Fat (g)")
         meal_cholesterol_val = parse_number(meal_cholesterol, "Cholesterol (mg)")
         meal_carbs_val = parse_number(meal_carbs, "Carbohydrates (g)")
-        # Default blank macro fields to 0
-        meal_calories_val = 0 if meal_calories_val is None else meal_calories_val
-        meal_protein_val = 0 if meal_protein_val is None else meal_protein_val
-        meal_fat_val = 0 if meal_fat_val is None else meal_fat_val
-        meal_cholesterol_val = 0 if meal_cholesterol_val is None else meal_cholesterol_val
-        meal_carbs_val = 0 if meal_carbs_val is None else meal_carbs_val
-        for label, value in [
-            ("Calories (kcal)", meal_calories_val),
-            ("Protein (g)", meal_protein_val),
-            ("Fat (g)", meal_fat_val),
-            ("Cholesterol (mg)", meal_cholesterol_val),
-            ("Carbohydrates (g)", meal_carbs_val)
-        ]:
-            valid = False if value < 0 else valid
-                
+
+        if any(v is None for v in [meal_calories_val, meal_protein_val, meal_fat_val, meal_cholesterol_val, meal_carbs_val]):
+            valid = False
+
         if valid:
             save_meal_to_airtable(
                 meal_date,
@@ -349,6 +462,13 @@ with st.form("meal_entry_form", clear_on_submit=True):
                 meal_carbs_val
             )
             get_meals_from_airtable.clear()
+            st.session_state['meal_name_ai'] = ""
+            st.session_state['meal_calories_ai'] = ""
+            st.session_state['meal_protein_ai'] = ""
+            st.session_state['meal_fat_ai'] = ""
+            st.session_state['meal_cholesterol_ai'] = ""
+            st.session_state['meal_carbs_ai'] = ""
+            st.success("Meal added successfully!")
             st.rerun()
         else:
             for msg in error_msgs:
@@ -361,18 +481,13 @@ st.header("Daily Macro Dashboard")
 if st.button("🔄 Refresh Dashboard"):
     get_meals_from_airtable.clear()
     get_macro_goals_from_airtable.clear()
+    logger.info("Dashboard refreshed.")
     st.rerun()
 
 selected_date_dashboard = st.date_input("View Dashboard for Date", value=get_gmt8_today())
 
 daily_meals_df = get_meals_from_airtable(selected_date_dashboard)
 
-# Debug print to help diagnose cloud/local differences
-# st.write("Current user_email:", st.session_state.get("user_email"))
-# st.write("daily_meals_df columns:", daily_meals_df.columns.tolist())
-# st.write(daily_meals_df)
-
-# Added defensive checks to ensure columns exist before summing, else 0.
 total_calories_today = daily_meals_df.get('Calories (kcal)', pd.Series(dtype=float)).sum()
 total_protein_today = daily_meals_df.get('Protein (g)', pd.Series(dtype=float)).sum()
 total_fat_today = daily_meals_df.get('Fat (g)', pd.Series(dtype=float)).sum()
@@ -383,7 +498,6 @@ goals_for_display = get_macro_goals_from_airtable()
 
 st.subheader(f"Progress for {selected_date_dashboard.strftime('%B %d, %Y')}")
 
-# Macro summary for gauge display with left/over text
 macro_summaries = [
     ("Calories", total_calories_today, goals_for_display['calories'], "kcal"),
     ("Protein", total_protein_today, goals_for_display['protein'], "g"),
@@ -417,16 +531,15 @@ for idx, (label, intake, goal, unit) in enumerate(macro_summaries):
 st.header("All Logged Meals")
 all_meals_df = get_meals_from_airtable()
 
-# Ensure DataFrame always has the correct columns for sorting and display
 expected_cols = ['Meal ID', 'Date', 'Meal', 'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Cholesterol (mg)', 'Carbohydrates (g)']
 for col in expected_cols:
     if col not in all_meals_df.columns:
         all_meals_df[col] = pd.Series(dtype='object')
 all_meals_df = all_meals_df[expected_cols]
 
-# Sort by Date descending, then by Airtable 'ID' descending
 if not all_meals_df.empty:
-    all_meals_df = all_meals_df.sort_values(by='Meal ID', ascending=False)
+    all_meals_df['Meal ID'] = all_meals_df['Meal ID'].astype(str)
+    all_meals_df = all_meals_df.sort_values(by=['Date', 'Meal ID'], ascending=[False, False])
 
 if not all_meals_df.empty:
     st.dataframe(all_meals_df, use_container_width=True)
@@ -445,7 +558,7 @@ if not all_meals_df.empty:
 
 st.header("Update a Logged Meal")
 with st.form("update_meal_form", clear_on_submit=True):
-    update_meal_id = st.text_input("Meal ID (required)", value="", placeholder="Enter Meal ID")
+    update_meal_id = st.text_input("Meal ID (required)", value="", placeholder="Enter Meal ID from the table above")
     update_meal_name = st.text_input("Meal Name", value="", placeholder="Leave blank to keep unchanged")
     row3_col1, row3_col2, row3_col3, row3_col4, row3_col5 = st.columns(5)
     with row3_col1:
@@ -464,47 +577,63 @@ with st.form("update_meal_form", clear_on_submit=True):
         if not update_meal_id.strip():
             st.error("Meal ID is required.")
         else:
-            # Find the Airtable record with this meal_id
-            records = meals_table.all(formula=f"{{meal_id}} = {update_meal_id.strip()}", max_records=1)
-            if not records:
-                st.error(f"No meal found with Meal ID {update_meal_id.strip()}.")
-            else:
-                record_id = records[0]['id']
+            record_id = update_meal_id.strip() # Assuming this is the Airtable record 'id'
+            try:
+                record_to_update = meals_table.get(record_id) # Attempt to fetch by actual Airtable record ID
+                logger.info(f"Found record for update with ID: {record_id}")
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 404:
+                    st.error(f"No meal found with Meal ID {record_id}. Please ensure you are entering the correct Airtable record ID.")
+                    logger.error(f"Update failed: No record found for ID {record_id}")
+                else:
+                    st.error(f"Error fetching meal for update: {e}")
+                    logger.error(f"Error fetching meal for update with ID {record_id}: {e}")
+                record_id = None # Invalidate record_id if not found
+
+            if record_id:
                 update_fields = {}
                 if update_meal_name.strip():
                     update_fields['meal'] = update_meal_name.strip()
+                # Use a helper for parsing and logging numeric inputs
+                def parse_and_log_numeric_update(value, field_name, unit):
+                    try:
+                        val = float(value.strip())
+                        logger.info(f"Parsed update for {field_name}: {val}{unit}")
+                        return val
+                    except ValueError:
+                        st.error(f"{field_name} must be a number.")
+                        logger.error(f"Invalid numeric input for {field_name}: '{value}'")
+                        return None
+
                 if update_calories.strip():
-                    try:
-                        update_fields['calories_kcal'] = float(update_calories.strip())
-                    except Exception:
-                        st.error("Calories must be a number.")
+                    parsed_cal = parse_and_log_numeric_update(update_calories, "Calories", "kcal")
+                    if parsed_cal is not None: update_fields['calories_kcal'] = parsed_cal
                 if update_protein.strip():
-                    try:
-                        update_fields['protein_g'] = float(update_protein.strip())
-                    except Exception:
-                        st.error("Protein must be a number.")
+                    parsed_prot = parse_and_log_numeric_update(update_protein, "Protein", "g")
+                    if parsed_prot is not None: update_fields['protein_g'] = parsed_prot
                 if update_fat.strip():
-                    try:
-                        update_fields['fat_g'] = float(update_fat.strip())
-                    except Exception:
-                        st.error("Fat must be a number.")
+                    parsed_fat = parse_and_log_numeric_update(update_fat, "Fat", "g")
+                    if parsed_fat is not None: update_fields['fat_g'] = parsed_fat
                 if update_cholesterol.strip():
-                    try:
-                        update_fields['cholesterol_mg'] = float(update_cholesterol.strip())
-                    except Exception:
-                        st.error("Cholesterol must be a number.")
+                    parsed_chol = parse_and_log_numeric_update(update_cholesterol, "Cholesterol", "mg")
+                    if parsed_chol is not None: update_fields['cholesterol_mg'] = parsed_chol
                 if update_carbs.strip():
-                    try:
-                        update_fields['carbs_g'] = float(update_carbs.strip())
-                    except Exception:
-                        st.error("Carbohydrates must be a number.")
-                if not update_fields:
-                    st.warning("No fields to update.")
+                    parsed_carbs = parse_and_log_numeric_update(update_carbs, "Carbohydrates", "g")
+                    if parsed_carbs is not None: update_fields['carbs_g'] = parsed_carbs
+
+                # Check if there were any parsing errors for numeric fields
+                if any(v is None for v in update_fields.values()):
+                    st.warning("Please correct the invalid numeric inputs for update.")
+                elif not update_fields:
+                    st.warning("No fields to update. Please fill in at least one field other than Meal ID.")
+                    logger.warning("Attempted update with no valid fields provided.")
                 else:
                     try:
                         meals_table.update(record_id, update_fields)
-                        st.success(f"Meal {update_meal_id.strip()} updated!")
+                        st.success(f"Meal {record_id} updated!")
+                        logger.info(f"Meal {record_id} successfully updated with fields: {update_fields}")
                         get_meals_from_airtable.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error updating meal: {e}")
+                        logger.error(f"Error updating meal {record_id}: {e}")

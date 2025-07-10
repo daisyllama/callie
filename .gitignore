@@ -2,5 +2,3 @@
 .streamlit/secrets.toml
 
 app.log
-
-.env
