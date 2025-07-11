@@ -12,7 +12,11 @@ import sys # Import the sys module
 
 # --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
 APP_TITLE = "Daily Macro Tracker"
-st.set_page_config(layout="wide", page_title=APP_TITLE)
+st.set_page_config(
+    layout="wide", 
+    page_title=APP_TITLE,
+    initial_sidebar_state="collapsed"
+    )
 
 st.title(APP_TITLE)
 
@@ -67,23 +71,20 @@ def get_airtable_tables():
             st.stop()
 
         meals_table = Table(api_key, base_id, "Meals")
-        goals_table = Table(api_key, base_id, "Goals")
+        # goals_table = Table(api_key, base_id, "Goals")
 
         logger.info("Successfully connected to Airtable.")
-        return meals_table, goals_table
+        return meals_table
     except Exception as e:
         st.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
         logger.error(f"Error connecting to Airtable: {e}.")
         st.stop()
 
 # Get the Airtable table objects at application startup
-meals_table, goals_table = get_airtable_tables()
+meals_table = get_airtable_tables()
 
 
 # --- Database Functions (now Airtable Functions) ---
-
-
-
 def save_meal_to_airtable(meal_date, meal_name, calories, protein, fat, cholesterol, carbs):
     """Saves a new meal entry to the Airtable 'Meals' table."""
     try:
@@ -150,9 +151,6 @@ def get_meals_from_airtable(selected_date=None):
 
 
 @st.cache_data(ttl=300)
-
-
-
 
 
 def display_progress(label, current, goal, unit):
@@ -423,6 +421,9 @@ total_fat_today = daily_meals_df.get('Fat (g)', pd.Series(dtype=float)).sum()
 total_cholesterol_today = daily_meals_df.get('Cholesterol (mg)', pd.Series(dtype=float)).sum()
 total_carbs_today = daily_meals_df.get('Carbohydrates (g)', pd.Series(dtype=float)).sum()
 
+
+# Define your macro goals for display. Hardcoded for now.
+# TODO: Cache this from goals_table instead of calling it on page load every time.
 goals_for_display = {
     'calories': 1700,
     'protein': 100,
@@ -512,66 +513,50 @@ with st.form("update_meal_form", clear_on_submit=True):
         if not update_meal_id.strip():
             st.error("Meal ID is required.")
         else:
-            record_id = update_meal_id.strip() # Assuming this is the Airtable record 'id'
-            try:
-                record_to_update = meals_table.get(record_id) # Attempt to fetch by actual Airtable record ID
-                logger.info(f"Found record for update with ID: {record_id}")
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 404:
-                    st.error(f"No meal found with Meal ID {record_id}. Please ensure you are entering the correct Airtable record ID.")
-                    logger.error(f"Update failed: No record found for ID {record_id}")
-                else:
-                    st.error(f"Error fetching meal for update: {e}")
-                    logger.error(f"Error fetching meal for update with ID {record_id}: {e}")
-                record_id = None # Invalidate record_id if not found
-
-            if record_id:
+            # Find the Airtable record with this meal_id
+            records = meals_table.all(formula=f"{{meal_id}} = {update_meal_id.strip()}", max_records=1)
+            if not records:
+                st.error(f"No meal found with Meal ID {update_meal_id.strip()}.")
+            else:
+                record_id = records[0]['id']
                 update_fields = {}
                 if update_meal_name.strip():
                     update_fields['meal'] = update_meal_name.strip()
-                # Use a helper for parsing and logging numeric inputs
-                def parse_and_log_numeric_update(value, field_name, unit):
-                    try:
-                        val = float(value.strip())
-                        logger.info(f"Parsed update for {field_name}: {val}{unit}")
-                        return val
-                    except ValueError:
-                        st.error(f"{field_name} must be a number.")
-                        logger.error(f"Invalid numeric input for {field_name}: '{value}'")
-                        return None
-
                 if update_calories.strip():
-                    parsed_cal = parse_and_log_numeric_update(update_calories, "Calories", "kcal")
-                    if parsed_cal is not None: update_fields['calories_kcal'] = parsed_cal
+                    try:
+                        update_fields['calories_kcal'] = float(update_calories.strip())
+                    except Exception:
+                        st.error("Calories must be a number.")
                 if update_protein.strip():
-                    parsed_prot = parse_and_log_numeric_update(update_protein, "Protein", "g")
-                    if parsed_prot is not None: update_fields['protein_g'] = parsed_prot
+                    try:
+                        update_fields['protein_g'] = float(update_protein.strip())
+                    except Exception:
+                        st.error("Protein must be a number.")
                 if update_fat.strip():
-                    parsed_fat = parse_and_log_numeric_update(update_fat, "Fat", "g")
-                    if parsed_fat is not None: update_fields['fat_g'] = parsed_fat
+                    try:
+                        update_fields['fat_g'] = float(update_fat.strip())
+                    except Exception:
+                        st.error("Fat must be a number.")
                 if update_cholesterol.strip():
-                    parsed_chol = parse_and_log_numeric_update(update_cholesterol, "Cholesterol", "mg")
-                    if parsed_chol is not None: update_fields['cholesterol_mg'] = parsed_chol
+                    try:
+                        update_fields['cholesterol_mg'] = float(update_cholesterol.strip())
+                    except Exception:
+                        st.error("Cholesterol must be a number.")
                 if update_carbs.strip():
-                    parsed_carbs = parse_and_log_numeric_update(update_carbs, "Carbohydrates", "g")
-                    if parsed_carbs is not None: update_fields['carbs_g'] = parsed_carbs
-
-                # Check if there were any parsing errors for numeric fields
-                if any(v is None for v in update_fields.values()):
-                    st.warning("Please correct the invalid numeric inputs for update.")
-                elif not update_fields:
-                    st.warning("No fields to update. Please fill in at least one field other than Meal ID.")
-                    logger.warning("Attempted update with no valid fields provided.")
+                    try:
+                        update_fields['carbs_g'] = float(update_carbs.strip())
+                    except Exception:
+                        st.error("Carbohydrates must be a number.")
+                if not update_fields:
+                    st.warning("No fields to update.")
                 else:
                     try:
                         meals_table.update(record_id, update_fields)
-                        st.success(f"Meal {record_id} updated!")
-                        logger.info(f"Meal {record_id} successfully updated with fields: {update_fields}")
+                        st.success(f"Meal {update_meal_id.strip()} updated!")
                         get_meals_from_airtable.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error updating meal: {e}")
-                        logger.error(f"Error updating meal {record_id}: {e}")
 
 
 # CLI test block for parse_openai_response
