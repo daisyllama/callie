@@ -248,29 +248,34 @@ def parse_openai_response(response_text):
     logger.info(f"Parsed OpenAI response: Meal='{meal_name}', Cals={calories}, Prot={protein}, Fat={fat}, Chol={cholesterol}, Carbs={carbs}")
     return meal_name, calories, protein, fat, cholesterol, carbs
 
+
+################################################################
+
 ### Streamlit Application Begin
 
-
-
-
-### Set Your Daily Macro Goals (Read Only Sidebar)
-
+### Set macro goals (changed to static values)
+# TODO: Cache this from goals_table instead of calling it on page load every time.
+goals_for_display = {
+    'calories': 1700,
+    'protein': 100,
+    'fat': 55,
+    'cholesterol': 300,
+    'carbs': 220
+}
 st.sidebar.header("Daily Macro Goals")
 st.sidebar.info(
     f"""
-    **Calories:** 1700 kcal  
-    **Protein:** 100 g  
-    **Fat:** 55 g  
-    **Cholesterol:** 300 mg  
-    **Carbohydrates:** 220 g
+    **Calories:** {goals_for_display['calories']} kcal  
+    **Protein:** {goals_for_display['protein']} g  
+    **Fat:** {goals_for_display['fat']} g  
+    **Cholesterol:** {goals_for_display['cholesterol']} mg  
+    **Carbohydrates:** {goals_for_display['carbs']} g
     """
 )
 
-# Remove or comment out the macro_goal_form and update logic from the sidebar
-
 # --- ChatGPT Integration Section ---
 st.header("Consult Callie")
-st.info("Tell me what you ate you fat fuck and i'll make you regret it.")
+st.info("Describe your meal.")
 
 with st.form("ai_meal_entry_form", clear_on_submit=True):
     ai_meal_description = st.text_area("Describe your meal", height=100)
@@ -288,6 +293,7 @@ with st.form("ai_meal_entry_form", clear_on_submit=True):
             st.session_state['meal_cholesterol_ai'] = cholesterol_ai if cholesterol_ai is not None else ""
             st.session_state['meal_carbs_ai'] = carbs_ai if carbs_ai is not None else ""
             st.success("Look at your macros! Are you happy now?")
+            # st.rerun()
         else:
             st.error("Error. Please try a different description or enter manually.")
     elif process_ai_meal_button and not ai_meal_description:
@@ -421,16 +427,6 @@ total_fat_today = daily_meals_df.get('Fat (g)', pd.Series(dtype=float)).sum()
 total_cholesterol_today = daily_meals_df.get('Cholesterol (mg)', pd.Series(dtype=float)).sum()
 total_carbs_today = daily_meals_df.get('Carbohydrates (g)', pd.Series(dtype=float)).sum()
 
-
-# Define your macro goals for display. Hardcoded for now.
-# TODO: Cache this from goals_table instead of calling it on page load every time.
-goals_for_display = {
-    'calories': 1700,
-    'protein': 100,
-    'fat': 55,
-    'cholesterol': 300,
-    'carbs': 220
-}
 
 st.subheader(f"Progress for {selected_date_dashboard.strftime('%B %d, %Y')}")
 
