@@ -7,7 +7,6 @@ import pytz
 import plotly.graph_objects as go
 from datetime import datetime, date, timedelta, timezone
 import openai
-import re
 import sys # Import the sys module
 
 # --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
@@ -248,55 +247,14 @@ def get_macros_from_openai(meal_description):
     Sends a meal description to OpenAI GPT and extracts macro information.
     The prompt is designed to encourage a JSON-like output for easier parsing.
     """
-    from openai_api import extract_macros_from_meal
+    from openai_api import get_macros_from_meal_description
     try:
         logger.info(f"Sending meal description to OpenAI: '{meal_description}'")
-        content = extract_macros_from_meal(meal_description)
-        logger.info(f"OpenAI raw response: '{content}'")
-        return parse_openai_response(content)
+        return get_macros_from_meal_description(meal_description)
     except Exception as e:
         st.error(f"Error communicating with OpenAI: {e}")
         logger.error(f"Error communicating with OpenAI: {e}")
         return None, None, None, None, None, None
-
-def parse_openai_response(response_text):
-    """
-    Parses the text response from OpenAI to extract meal name and macro values.
-    Uses regex to find key-value pairs.
-    """
-    meal_name = ""
-    calories = None
-    protein = None
-    fat = None
-    cholesterol = None
-    carbs = None
-
-    meal_match = re.search(r"Meal:\s*(.*?)(?:,|$)", response_text, re.IGNORECASE)
-    if meal_match:
-        meal_name = meal_match.group(1).strip()
-
-    calories_match = re.search(r"Calories:\s*(\d+)", response_text, re.IGNORECASE)
-    if calories_match:
-        calories = int(calories_match.group(1))
-
-    protein_match = re.search(r"Protein:\s*(\d+)g", response_text, re.IGNORECASE)
-    if protein_match:
-        protein = int(protein_match.group(1))
-
-    fat_match = re.search(r"Fat:\s*(\d+)g", response_text, re.IGNORECASE)
-    if fat_match:
-        fat = int(fat_match.group(1))
-
-    cholesterol_match = re.search(r"Cholesterol:\s*(\d+)mg", response_text, re.IGNORECASE)
-    if cholesterol_match:
-        cholesterol = int(cholesterol_match.group(1))
-
-    carbs_match = re.search(r"Carbs:\s*(\d+)g", response_text, re.IGNORECASE)
-    if carbs_match:
-        carbs = int(carbs_match.group(1))
-
-    logger.info(f"Parsed OpenAI response: Meal='{meal_name}', Cals={calories}, Prot={protein}, Fat={fat}, Chol={cholesterol}, Carbs={carbs}")
-    return meal_name, calories, protein, fat, cholesterol, carbs
 
 
 ################################################################
@@ -731,9 +689,3 @@ else:
                             st.error(f"Error updating meal: {e}")
 
 
-# CLI test block for parse_openai_response
-if __name__ == "__main__":
-    print("Test the macro parser without OpenAI API.")
-    mock_response = "Meal: Chicken Rice with 2 Eggs, Calories: 650kcal, Protein: 40g, Fat: 18g, Cholesterol: 420mg, Carbs: 70g"
-    result = parse_openai_response(mock_response)
-    print("Parsed result:", result)
