@@ -113,6 +113,13 @@ python -c "from openai_api import get_openai_client; c=get_openai_client(); prin
 - `model_not_found`: model name is not available to your API key/project.
 - `api_key client option must be set`: your key is not being loaded in that command context.
 
+## OpenAI Model Used
+
+- Current default model: `gpt-4o-mini`
+- Configured in: `openai_api.py` inside `get_macros_from_meal_description(..., model="gpt-4o-mini", ...)`
+
+If you want to switch models, update that default model argument to one available in your OpenAI project.
+
 ## Notes
 
 - Macro goals currently persist in Streamlit session state (not saved to Airtable yet).
