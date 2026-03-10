@@ -13,7 +13,7 @@ A Streamlit app for tracking daily meals, visualizing macro progress, and using 
 	- `Log Your Meals`
 	- `Update Profile`
 - `Update Profile` page to:
-	- Update macro goals (stored in session state)
+	- Update macro goals (saved to Airtable `Goals` table)
 	- Manage 3 common meal slots (add/update/delete)
 - Meal history table and CSV export.
 - Update existing logged meals by `meal_id`.
@@ -50,6 +50,19 @@ Expected fields:
 - `carbs_g`
 
 Note: The app fetches the top 3 rows from `preset_meals`, sorted by `meal_id`.
+
+### `Goals`
+
+Expected fields (recommended):
+
+- `calories_kcal`
+- `protein_g`
+- `fat_g`
+- `cholesterol_mg`
+- `carbs_g`
+
+The app reads the first record in `Goals` for dashboard/sidebar targets and updates that record when you save goals in `Update Profile`.
+If no record exists, the app creates one on first save.
 
 ## Setup
 
@@ -122,5 +135,5 @@ If you want to switch models, update that default model argument to one availabl
 
 ## Notes
 
-- Macro goals currently persist in Streamlit session state (not saved to Airtable yet).
+- Macro goals are loaded from Airtable `Goals` into session state at startup, then persisted back to Airtable on save.
 - Quick-add preset macros map to calories, protein, and carbs; fat/cholesterol stay blank unless manually entered.

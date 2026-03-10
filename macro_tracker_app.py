@@ -71,17 +71,17 @@ def get_airtable_tables():
 
         meals_table = Table(api_key, base_id, "Meals")
         preset_meals_table = Table(api_key, base_id, "preset_meals")
-        # goals_table = Table(api_key, base_id, "Goals")
+        goals_table = Table(api_key, base_id, "Goals")
 
         logger.info("Successfully connected to Airtable.")
-        return meals_table, preset_meals_table
+        return meals_table, preset_meals_table, goals_table
     except Exception as e:
         st.error(f"Error connecting to Airtable: {e}. Please check your internet connection, API Key, and Base ID in .streamlit/secrets.toml.")
         logger.error(f"Error connecting to Airtable: {e}.")
         st.stop()
 
 # Get the Airtable table objects at application startup
-meals_table, preset_meals_table = get_airtable_tables()
+meals_table, preset_meals_table, goals_table = get_airtable_tables()
 
 
 # --- Database Functions (now Airtable Functions) ---
@@ -200,6 +200,51 @@ def get_top_preset_meal_records(limit=3):
 
 
 @st.cache_data(ttl=300)
+def get_goals_from_airtable():
+    """Fetches macro goals from Airtable Goals table (single-row config)."""
+    try:
+        records = goals_table.all(max_records=1)
+        if not records:
+            return None, None
+
+        record = records[0]
+        fields = record.get('fields', {})
+
+        loaded_goals = {
+            'calories': fields.get('calories_kcal', fields.get('calories')),
+            'protein': fields.get('protein_g', fields.get('protein')),
+            'fat': fields.get('fat_g', fields.get('fat')),
+            'cholesterol': fields.get('cholesterol_mg', fields.get('cholesterol')),
+            'carbs': fields.get('carbs_g', fields.get('carbs')),
+        }
+        return record.get('id'), loaded_goals
+    except Exception as e:
+        logger.error(f"Error fetching goals from Airtable: {e}")
+        return None, None
+
+
+def save_goals_to_airtable(updated_goals):
+    """Upserts macro goals to Airtable Goals table."""
+    goal_fields = {
+        'calories_kcal': float(updated_goals['calories']),
+        'protein_g': float(updated_goals['protein']),
+        'fat_g': float(updated_goals['fat']),
+        'cholesterol_mg': float(updated_goals['cholesterol']),
+        'carbs_g': float(updated_goals['carbs']),
+    }
+
+    try:
+        record_id, _ = get_goals_from_airtable()
+        if record_id:
+            goals_table.update(record_id, goal_fields)
+        else:
+            goals_table.create(goal_fields)
+        get_goals_from_airtable.clear()
+    except Exception as e:
+        raise RuntimeError(f"Failed to save goals to Airtable: {e}") from e
+
+
+@st.cache_data(ttl=300)
 
 
 def display_progress(label, current, goal, unit):
@@ -270,7 +315,17 @@ DEFAULT_GOALS = {
 }
 
 if 'goals_for_display' not in st.session_state:
-    st.session_state['goals_for_display'] = DEFAULT_GOALS.copy()
+    goal_record_id, airtable_goals = get_goals_from_airtable()
+    if airtable_goals:
+        hydrated_goals = DEFAULT_GOALS.copy()
+        for key, value in airtable_goals.items():
+            if value is not None:
+                hydrated_goals[key] = value
+        st.session_state['goals_for_display'] = hydrated_goals
+        st.session_state['goals_record_id'] = goal_record_id
+    else:
+        st.session_state['goals_for_display'] = DEFAULT_GOALS.copy()
+        st.session_state['goals_record_id'] = None
 
 if 'meal_name_ai' not in st.session_state:
     st.session_state['meal_name_ai'] = ""
@@ -545,15 +600,20 @@ elif page == "Update Profile":
 
         save_goals = st.form_submit_button("Save Macro Goals")
         if save_goals:
-            st.session_state['goals_for_display'] = {
+            updated_goals = {
                 'calories': updated_calories,
                 'protein': updated_protein,
                 'fat': updated_fat,
                 'cholesterol': updated_cholesterol,
                 'carbs': updated_carbs,
             }
-            st.success("Macro goals updated.")
-            st.rerun()
+            try:
+                save_goals_to_airtable(updated_goals)
+                st.session_state['goals_for_display'] = updated_goals
+                st.success("Macro goals updated and saved to Airtable.")
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
 
     st.divider()
     render_common_meals_editor()
