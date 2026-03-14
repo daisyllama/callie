@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 import logging
 from pyairtable import Table
-import requests
 import pytz
 import plotly.graph_objects as go
-from datetime import datetime, date, timedelta, timezone
-import openai
+from datetime import datetime
 import sys # Import the sys module
 
 # --- Set Page Config (MUST BE FIRST STREAMLIT COMMAND) ---
@@ -37,23 +35,6 @@ logger.addHandler(handler)
 
 # You can also set specific loggers for your modules if needed
 logging.info("Application started and logging configured to standard output.")
-
-
-# --- OpenAI API Initialization ---
-@st.cache_resource
-def get_openai_client():
-    """Initializes and returns the OpenAI client."""
-    try:
-        openai_api_key = st.secrets.get("OPENAI_API_KEY")
-        if not openai_api_key:
-            st.error("OpenAI API Key not found. Check .streamlit/secrets.toml if local or app settings in https://share.streamlit.io/.")
-            logger.error("OpenAI API Key not found.")
-            st.stop()
-        return openai.OpenAI(api_key=openai_api_key)
-    except Exception as e:
-        st.error(f"Error initializing OpenAI client: {e}")
-        logger.error(f"Error initializing OpenAI client: {e}")
-        st.stop()
 
 # --- Airtable Connection ---
 @st.cache_resource
@@ -243,20 +224,6 @@ def save_goals_to_airtable(updated_goals):
     except Exception as e:
         raise RuntimeError(f"Failed to save goals to Airtable: {e}") from e
 
-
-@st.cache_data(ttl=300)
-
-
-def display_progress(label, current, goal, unit):
-    """Displays a progress bar and text for a given macro compared to its goal."""
-    if goal > 0:
-        percentage = (current / goal) * 100
-        st.metric(label=f"{label} ({unit})", value=f"{current:.0f}/{goal:.0f}", delta=f"{percentage:.1f}%")
-        st.progress(min(percentage / 100, 1.0))
-    else:
-        st.metric(label=f"{label} ({unit})", value=f"{current:.0f}/{goal:.0f}", delta="Goal not set")
-        st.progress(0.0)
-
 def plot_gauge(label, value, goal, unit):
     percent = min(value / goal * 100 if goal else 0, 100)
     fig = go.Figure(go.Indicator(
@@ -287,18 +254,20 @@ def get_gmt8_today():
     return datetime.now(tz).date()
 
 # --- OpenAI Integration Functions ---
-def get_macros_from_openai(meal_description):
+def get_macros_from_openai(meal_description, use_local=False):
     """
-    Sends a meal description to OpenAI GPT and extracts macro information.
-    The prompt is designed to encourage a JSON-like output for easier parsing.
+    Sends a meal description to the configured AI provider and extracts macro information.
+    Set use_local=True to use the locally hosted Ollama model instead of OpenAI.
     """
     from openai_api import get_macros_from_meal_description
+
+    provider = "Ollama (local gpt-oss)" if use_local else "OpenAI"
     try:
-        logger.info(f"Sending meal description to OpenAI: '{meal_description}'")
-        return get_macros_from_meal_description(meal_description)
+        logger.info(f"Sending meal description to {provider}: '{meal_description}'")
+        return get_macros_from_meal_description(meal_description, use_local=use_local)
     except Exception as e:
-        st.error(f"Error communicating with OpenAI: {e}")
-        logger.error(f"Error communicating with OpenAI: {e}")
+        st.error(f"Error communicating with {provider}: {e}")
+        logger.error(f"Error communicating with {provider}: {e}")
         return None, None, None, None, None, None
 
 
@@ -470,6 +439,15 @@ def render_common_meals_editor():
 if page == "Log Your Meals":
     st.header("Consult Callie")
     st.info("Describe your meal.")
+    use_local_model = st.toggle(
+        "Use Local Ollama Model",
+        value=False,
+        help="When enabled, uses your locally hosted gpt-oss model via Ollama. When off, uses the paid OpenAI API."
+    )
+    if use_local_model:
+        st.caption("Model: **gpt-oss** via Ollama (local)")
+    else:
+        st.caption("Model: **gpt-4o-mini** via OpenAI (paid)")
 
     with st.form("ai_meal_entry_form", clear_on_submit=True):
         ai_meal_description = st.text_area("Describe your meal", height=100)
@@ -477,7 +455,7 @@ if page == "Log Your Meals":
 
         if process_ai_meal_button and ai_meal_description:
             with st.spinner("Shaming..."):
-                meal_name_ai, calories_ai, protein_ai, fat_ai, cholesterol_ai, carbs_ai = get_macros_from_openai(ai_meal_description)
+                meal_name_ai, calories_ai, protein_ai, fat_ai, cholesterol_ai, carbs_ai = get_macros_from_openai(ai_meal_description, use_local=use_local_model)
 
             if meal_name_ai is not None:
                 st.session_state['meal_name_ai'] = meal_name_ai

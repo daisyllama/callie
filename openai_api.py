@@ -4,6 +4,8 @@ import streamlit as st
 import re
 import json
 
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+
 
 class OpenAIMacroError(RuntimeError):
     """Domain-specific error for macro extraction failures."""
@@ -18,6 +20,11 @@ def get_openai_client():
     if not api_key:
         raise RuntimeError("No OpenAI API key found in Streamlit secrets or environment variable.")
     return openai.OpenAI(api_key=api_key)
+
+
+def get_ollama_client():
+    """Returns an OpenAI-compatible client pointed at the local Ollama server."""
+    return openai.OpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
 
 
 def parse_openai_macro_response(response_text):
@@ -95,39 +102,59 @@ def _map_openai_error(err):
     return f"OpenAI API error: {err}"
 
 
-def extract_macros_from_meal(meal_description, model="gpt-3.5-turbo", temperature=0.1, max_tokens=150):
-    """
-    Calls OpenAI API to extract macros from a meal description.
-    Returns the raw response text (for troubleshooting) and the parsed macro values.
-    """
+def _build_macro_messages(meal_description):
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You estimate meal macros. Return ONLY valid JSON with exactly these keys: "
+                "Meal, Calories, Protein, Fat, Cholesterol, Carbs. "
+                "Values should be strings with units, e.g. \"400kcal\", \"25g\", \"70mg\". "
+                "No markdown, no explanations, no extra keys."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Extract macros for this meal description and return strict JSON only: "
+                f"{meal_description}"
+            ),
+        }
+    ]
+
+
+def _extract_content_from_response(response):
+    message = response.choices[0].message
+    content = (message.content or "").strip()
+    reasoning = getattr(message, "reasoning", "") or ""
+    finish_reason = getattr(response.choices[0], "finish_reason", None)
+
+    if not content and reasoning and finish_reason == "length":
+        raise OpenAIMacroError(
+            "The model returned only reasoning and no final JSON answer. "
+            "Try reducing prompt complexity, increasing max_tokens, or switching models."
+        )
+
+    if not content:
+        raise OpenAIMacroError(
+            f"The model returned an empty response. finish_reason={finish_reason!r}"
+        )
+
+    return content
+
+
+def extract_macros_from_openai(meal_description, model="gpt-4o-mini", temperature=0.1, max_tokens=150):
+    """Calls paid OpenAI API and returns raw model text for macro extraction."""
     client = get_openai_client()
     try:
         response = client.chat.completions.create(
             model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You estimate meal macros. Return ONLY valid JSON with exactly these keys: "
-                        "Meal, Calories, Protein, Fat, Cholesterol, Carbs. "
-                        "Values should be strings with units, e.g. \"400kcal\", \"25g\", \"70mg\". "
-                        "No markdown, no explanations, no extra keys."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Extract macros for this meal description and return strict JSON only: "
-                        f"{meal_description}"
-                    ),
-                }
-            ],
+            messages=_build_macro_messages(meal_description),
             response_format={"type": "json_object"},
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
         )
-        content = response.choices[0].message.content.strip()
-        # Troubleshooting log: print raw response to Streamlit and stdout
+        content = _extract_content_from_response(response)
         print(f"[OpenAI API RAW RESPONSE]: {content}")
         try:
             st.code(content, language="text")
@@ -138,21 +165,55 @@ def extract_macros_from_meal(meal_description, model="gpt-3.5-turbo", temperatur
         raise OpenAIMacroError(_map_openai_error(e)) from e
 
 
-def get_macros_from_meal_description(meal_description, model="gpt-4o-mini", temperature=0.1, max_tokens=150):
-    """Single call used by app code: returns parsed macro tuple."""
-    content = extract_macros_from_meal(
-        meal_description=meal_description,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+def extract_macros_from_ollama(meal_description, model="gpt-oss", temperature=0.1, max_tokens=150, think="low"):
+    """Calls local Ollama OpenAI-compatible API and returns raw model text."""
+    client = get_ollama_client()
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=_build_macro_messages(meal_description),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body={"think": think},
+        )
+        content = _extract_content_from_response(response)
+        print(f"[Ollama API RAW RESPONSE]: {content}")
+        try:
+            st.code(content, language="text")
+        except Exception:
+            pass
+        return content
+    except Exception as e:
+        raise OpenAIMacroError(_map_openai_error(e)) from e
+
+
+def get_macros_from_meal_description(meal_description, model="gpt-4o-mini", temperature=0.1, max_tokens=150, use_local=False, local_model="gpt-oss"):
+    """Single call used by app code: returns parsed macro tuple.
+
+    Set use_local=True to route the request to the locally hosted Ollama model
+    (local_model) instead of the paid OpenAI API.
+    """
+    if use_local:
+        content = extract_macros_from_ollama(
+            meal_description=meal_description,
+            model=local_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    else:
+        content = extract_macros_from_openai(
+            meal_description=meal_description,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
     return parse_openai_macro_response(content)
 
 
 if __name__ == "__main__":
     test_meal = input("Enter a meal description: ")
     try:
-        raw = extract_macros_from_meal(test_meal)
+        raw = extract_macros_from_openai(test_meal)
         parsed = parse_openai_macro_response(raw)
         print("OpenAI raw response:")
         print(raw)
