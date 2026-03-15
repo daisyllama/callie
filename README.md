@@ -87,6 +87,45 @@ OPENAI_API_KEY="your_openai_api_key"
 streamlit run macro_tracker_app.py
 ```
 
+## Telegram Bot (Optional)
+
+You can log meals from Telegram and save them to Airtable with AI macro parsing.
+
+### Required environment variables
+
+```bash
+TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
+AIRTABLE_API_KEY="your_airtable_api_key"
+AIRTABLE_BASE_ID="your_airtable_base_id"
+OPENAI_API_KEY="your_openai_api_key"
+```
+
+### Optional environment variables
+
+```bash
+TELEGRAM_ALLOWED_USER_IDS="123456789,987654321"
+TELEGRAM_USE_LOCAL_MODEL="false"
+TELEGRAM_OPENAI_MODEL="gpt-4o-mini"
+TELEGRAM_LOCAL_MODEL="gpt-oss"
+TELEGRAM_MAX_TOKENS="400"
+TELEGRAM_OLLAMA_THINK="low"
+```
+
+- `TELEGRAM_ALLOWED_USER_IDS`: comma-separated Telegram user IDs. If omitted, any user who finds the bot can use it.
+- `TELEGRAM_USE_LOCAL_MODEL=true`: routes macro parsing to local Ollama instead of OpenAI.
+
+### Run Telegram bot
+
+```bash
+python telegram_bot.py
+```
+
+### Telegram bot flow
+
+1. Send meal text (or `/log <meal>`).
+2. Bot estimates macros.
+3. Tap `Save` to write to Airtable `Meals`, or `Cancel`.
+
 ## Test OpenAI (IDE)
 
 Use these commands in the VS Code terminal from the project root.

@@ -259,9 +259,9 @@ def get_macros_from_openai(meal_description, use_local=False):
     Sends a meal description to the configured AI provider and extracts macro information.
     Set use_local=True to use the locally hosted Ollama model instead of OpenAI.
     """
-    from openai_api import get_macros_from_meal_description
+    from openai_api import DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_MODEL, get_macros_from_meal_description
 
-    provider = "Ollama (local gpt-oss)" if use_local else "OpenAI"
+    provider = f"Ollama (local {DEFAULT_OLLAMA_MODEL})" if use_local else f"OpenAI ({DEFAULT_OPENAI_MODEL})"
     try:
         logger.info(f"Sending meal description to {provider}: '{meal_description}'")
         return get_macros_from_meal_description(meal_description, use_local=use_local)
@@ -437,17 +437,23 @@ def render_common_meals_editor():
 
 
 if page == "Log Your Meals":
+    from openai_api import DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_MODEL
+
     st.header("Consult Callie")
     st.info("Describe your meal.")
+
+    if "meal_add_success_message" in st.session_state:
+        st.success(st.session_state.pop("meal_add_success_message"))
+
     use_local_model = st.toggle(
         "Use Local Ollama Model",
         value=False,
         help="When enabled, uses your locally hosted gpt-oss model via Ollama. When off, uses the paid OpenAI API."
     )
     if use_local_model:
-        st.caption("Model: **gpt-oss** via Ollama (local)")
+        st.caption(f"Model: **{DEFAULT_OLLAMA_MODEL}** via Ollama (local)")
     else:
-        st.caption("Model: **gpt-4o-mini** via OpenAI (paid)")
+        st.caption(f"Model: **{DEFAULT_OPENAI_MODEL}** via OpenAI (paid)")
 
     with st.form("ai_meal_entry_form", clear_on_submit=True):
         ai_meal_description = st.text_area("Describe your meal", height=100)
@@ -552,7 +558,7 @@ if page == "Log Your Meals":
                 st.session_state['meal_fat_ai'] = ""
                 st.session_state['meal_cholesterol_ai'] = ""
                 st.session_state['meal_carbs_ai'] = ""
-                st.success("Meal added successfully!")
+                st.session_state['meal_add_success_message'] = f"'{meal_name}' added successfully!"
                 st.rerun()
             else:
                 for msg in error_msgs:

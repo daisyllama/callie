@@ -6,9 +6,20 @@ import json
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OLLAMA_MODEL = "llama3:latest"
+DEFAULT_TEMPERATURE = 0.1
+DEFAULT_MAX_TOKENS = 200
+DEFAULT_OLLAMA_THINK = "none"
+REASONING_ONLY_ERROR_FRAGMENT = "only reasoning and no final JSON answer"
+
 
 class OpenAIMacroError(RuntimeError):
     """Domain-specific error for macro extraction failures."""
+
+
+def _resolve_value(value, default):
+    return default if value is None else value
 
 
 def get_openai_client():
@@ -143,8 +154,12 @@ def _extract_content_from_response(response):
     return content
 
 
-def extract_macros_from_openai(meal_description, model="gpt-4o-mini", temperature=0.1, max_tokens=150):
+def extract_macros_from_openai(meal_description, model=None, temperature=None, max_tokens=None):
     """Calls paid OpenAI API and returns raw model text for macro extraction."""
+    model = _resolve_value(model, DEFAULT_OPENAI_MODEL)
+    temperature = _resolve_value(temperature, DEFAULT_TEMPERATURE)
+    max_tokens = _resolve_value(max_tokens, DEFAULT_MAX_TOKENS)
+
     client = get_openai_client()
     try:
         response = client.chat.completions.create(
@@ -165,40 +180,82 @@ def extract_macros_from_openai(meal_description, model="gpt-4o-mini", temperatur
         raise OpenAIMacroError(_map_openai_error(e)) from e
 
 
-def extract_macros_from_ollama(meal_description, model="gpt-oss", temperature=0.1, max_tokens=150, think="low"):
+def extract_macros_from_ollama(meal_description, model=None, temperature=None, max_tokens=None, think=None):
     """Calls local Ollama OpenAI-compatible API and returns raw model text."""
+    model = _resolve_value(model, DEFAULT_OLLAMA_MODEL)
+    temperature = _resolve_value(temperature, DEFAULT_TEMPERATURE)
+    max_tokens = _resolve_value(max_tokens, DEFAULT_MAX_TOKENS)
+    think = _resolve_value(think, DEFAULT_OLLAMA_THINK)
+
     client = get_ollama_client()
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=_build_macro_messages(meal_description),
-            temperature=temperature,
-            max_tokens=max_tokens,
-            extra_body={"think": think},
-        )
-        content = _extract_content_from_response(response)
-        print(f"[Ollama API RAW RESPONSE]: {content}")
+    attempts = [(think, max_tokens)]
+    if think != "none":
+        attempts.append(("none", max(max_tokens, 800)))
+    attempts.append(("none", max(max_tokens * 2, 1200)))
+
+    attempted = set()
+    last_error = None
+
+    for attempt_think, attempt_max_tokens in attempts:
+        key = (attempt_think, attempt_max_tokens)
+        if key in attempted:
+            continue
+        attempted.add(key)
+
         try:
-            st.code(content, language="text")
-        except Exception:
-            pass
-        return content
-    except Exception as e:
-        raise OpenAIMacroError(_map_openai_error(e)) from e
+            response = client.chat.completions.create(
+                model=model,
+                messages=_build_macro_messages(meal_description),
+                response_format={"type": "json_object"},
+                temperature=temperature,
+                max_tokens=attempt_max_tokens,
+                extra_body={"think": attempt_think},
+            )
+            content = _extract_content_from_response(response)
+            print(f"[Ollama API RAW RESPONSE]: {content}")
+            try:
+                st.code(content, language="text")
+            except Exception:
+                pass
+            return content
+        except OpenAIMacroError as e:
+            last_error = e
+            if REASONING_ONLY_ERROR_FRAGMENT in str(e):
+                continue
+            raise
+        except Exception as e:
+            raise OpenAIMacroError(_map_openai_error(e)) from e
+
+    raise last_error if last_error else OpenAIMacroError("Ollama returned no usable response.")
 
 
-def get_macros_from_meal_description(meal_description, model="gpt-4o-mini", temperature=0.1, max_tokens=150, use_local=False, local_model="gpt-oss"):
+def get_macros_from_meal_description(
+    meal_description,
+    model=None,
+    temperature=None,
+    max_tokens=None,
+    use_local=False,
+    local_model=None,
+    think=None,
+):
     """Single call used by app code: returns parsed macro tuple.
 
     Set use_local=True to route the request to the locally hosted Ollama model
     (local_model) instead of the paid OpenAI API.
     """
+    model = _resolve_value(model, DEFAULT_OPENAI_MODEL)
+    local_model = _resolve_value(local_model, DEFAULT_OLLAMA_MODEL)
+    temperature = _resolve_value(temperature, DEFAULT_TEMPERATURE)
+    max_tokens = _resolve_value(max_tokens, DEFAULT_MAX_TOKENS)
+    think = _resolve_value(think, DEFAULT_OLLAMA_THINK)
+
     if use_local:
         content = extract_macros_from_ollama(
             meal_description=meal_description,
             model=local_model,
             temperature=temperature,
             max_tokens=max_tokens,
+            think=think,
         )
     else:
         content = extract_macros_from_openai(
